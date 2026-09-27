@@ -1,0 +1,476 @@
+{
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 0,
+  "fiscalYearStartMonth": 0,
+  "schemaVersion": 41,
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "DS_CW_PROM",
+        "skipUrlSync": false,
+        "multi": false,
+        "allowCustomValue": true,
+        "includeAll": false,
+        "auto": false,
+        "auto_min": "10s",
+        "auto_count": 30,
+        "label": "Metrics (PromQL)",
+        "query": "grafana-amazonprometheus-datasource"
+      },
+      {
+        "type": "datasource",
+        "name": "DS_CLOUDWATCH",
+        "skipUrlSync": false,
+        "multi": false,
+        "allowCustomValue": true,
+        "includeAll": false,
+        "auto": false,
+        "auto_min": "10s",
+        "auto_count": 30,
+        "label": "CloudWatch",
+        "query": "cloudwatch"
+      },
+      {
+        "type": "constant",
+        "name": "BASELINE_GIB",
+        "skipUrlSync": false,
+        "multi": false,
+        "allowCustomValue": true,
+        "includeAll": false,
+        "auto": false,
+        "auto_min": "10s",
+        "auto_count": 30,
+        "hide": 2,
+        "label": "Baseline GiB",
+        "query": "2"
+      },
+      {
+        "type": "constant",
+        "name": "BASELINE_VCPU",
+        "skipUrlSync": false,
+        "multi": false,
+        "allowCustomValue": true,
+        "includeAll": false,
+        "auto": false,
+        "auto_min": "10s",
+        "auto_count": 30,
+        "hide": 2,
+        "label": "Baseline vCPU",
+        "query": "1"
+      },
+      {
+        "type": "textbox",
+        "name": "KAGERO_LOG_GROUP",
+        "skipUrlSync": false,
+        "multi": false,
+        "allowCustomValue": true,
+        "includeAll": false,
+        "auto": false,
+        "auto_min": "10s",
+        "auto_count": 30,
+        "label": "CloudWatch log group",
+        "query": "/kagero/<image-name>"
+      },
+      {
+        "type": "textbox",
+        "name": "KAGERO_PLATFORM_LOG_GROUP",
+        "skipUrlSync": false,
+        "multi": false,
+        "allowCustomValue": true,
+        "includeAll": false,
+        "auto": false,
+        "auto_min": "10s",
+        "auto_count": 30,
+        "label": "MicroVM platform log group",
+        "query": "/aws/lambda/<function-name>"
+      }
+    ]
+  },
+  "annotations": {},
+  "title": "kagero — MicroVM Overview",
+  "uid": "kagero-microvm-overview-cloudwatch",
+  "tags": [
+    "kagero",
+    "lambda",
+    "microvm"
+  ],
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "description": "Lambda MicroVM fleet health: lifecycle, burst usage, suspend/resume latency, cost estimate, logs and traces. All cost figures are ESTIMATES (ADR-009).",
+  "panels": [
+    {
+      "type": "row",
+      "collapsed": false,
+      "id": 0,
+      "panels": [],
+      "title": "MicroVMs",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "h": 1,
+        "w": 24
+      }
+    },
+    {
+      "type": "stat",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Active MicroVMs (rate)",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "description": "Concurrent RUNNING MicroVMs — the running_seconds counter increases once per second per active MicroVM.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(kagero_microvm_running_seconds_total[$__rate_interval]))",
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${DS_CW_PROM}"
+          },
+          "legendFormat": "active"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Lifecycle transitions",
+      "gridPos": {
+        "h": 8,
+        "w": 9,
+        "x": 6,
+        "y": 1
+      },
+      "description": "run/suspend/resume/terminate events per interval.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (kagero_lifecycle_event) (increase(kagero_microvm_lifecycle_transitions_total[$__rate_interval])))",
+          "refId": "B",
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${DS_CW_PROM}"
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Suspend duration p95",
+      "gridPos": {
+        "h": 8,
+        "w": 9,
+        "x": 15,
+        "y": 1
+      },
+      "description": "Time in suspended state (measured on resume), 95th percentile.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(kagero_microvm_suspend_duration_seconds_bucket[$__rate_interval])))",
+          "refId": "C",
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${DS_CW_PROM}"
+          },
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Burst usage above baseline",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "description": "Above-baseline vCPU-seconds and GiB-seconds rates.",
+      "targets": [
+        {
+          "expr": "sum(rate(kagero_microvm_burst_vcpu_seconds_total[$__rate_interval]))",
+          "refId": "D",
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${DS_CW_PROM}"
+          },
+          "legendFormat": "burst vCPU"
+        },
+        {
+          "expr": "sum(rate(kagero_microvm_burst_memory_gib_seconds_total[$__rate_interval]))",
+          "refId": "E",
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${DS_CW_PROM}"
+          },
+          "legendFormat": "burst GiB"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Degraded events (fail-soft)",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "description": "Lifecycle steps the agent could not complete cleanly — relay timeouts, collector errors, OTLP flush failures. Should stay 0. Counts only events that reached the OTLP path — when the collector itself is down the sole record is the stdout fallback (see the platform-logs panel in the Logs row; CloudWatch only).",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(kagero_microvm_lifecycle_transitions_total{kagero_lifecycle_event=\"degraded\"}[$__rate_interval]))",
+          "refId": "F",
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${DS_CW_PROM}"
+          },
+          "legendFormat": "degraded"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "collapsed": false,
+      "id": 0,
+      "panels": [],
+      "title": "Cost — estimate",
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "h": 1,
+        "w": 24
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Estimated compute cost (USD/hour)",
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 18
+      },
+      "description": "ESTIMATE — baseline + burst at us-east-1 ARM list prices; excludes snapshot IO/storage, data transfer, free tier. Other regions are UNVERIFIED (PoC-09). Reconcile against CUR.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "3600 * (sum(rate(kagero_microvm_running_seconds_total[$__rate_interval])) * ($BASELINE_GIB * 0.0000036667 + $BASELINE_VCPU * 0.0000276944) + sum(rate(kagero_microvm_burst_memory_gib_seconds_total[$__rate_interval])) * 0.0000036667 + sum(rate(kagero_microvm_burst_vcpu_seconds_total[$__rate_interval])) * 0.0000276944)",
+          "refId": "G",
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${DS_CW_PROM}"
+          },
+          "legendFormat": "$/hour"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "What this estimate covers",
+      "options": {
+        "mode": "markdown",
+        "content": "**Estimate only (ADR-009).** Components priced here: baseline + burst compute.\n\nNot priced: snapshot loads/writes, suspended storage, data transfer, image storage.\nPrices are us-east-1 ARM list values — other regions are **unverified** (PoC-09).\nReconcile against CUR; the @kagero/pricing package computes the full breakdown."
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 18
+      }
+    },
+    {
+      "type": "row",
+      "collapsed": true,
+      "id": 0,
+      "panels": [
+        {
+          "type": "logs",
+          "transparent": false,
+          "repeatDirection": "h",
+          "title": "Usage summaries",
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 27
+          },
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "${DS_CLOUDWATCH}"
+          },
+          "description": "Per-MicroVM usage facts emitted on suspend/terminate.",
+          "targets": [
+            {
+              "queryMode": "Logs",
+              "id": "",
+              "region": "default",
+              "refId": "H",
+              "queryLanguage": "CWLI",
+              "expression": "fields @timestamp, @message\n| filter @message like /kagero.usage.summary/\n| sort @timestamp desc\n| limit 200",
+              "logGroupNames": [
+                "$KAGERO_LOG_GROUP"
+              ],
+              "datasource": {
+                "type": "cloudwatch",
+                "uid": "${DS_CLOUDWATCH}"
+              }
+            }
+          ]
+        },
+        {
+          "type": "logs",
+          "transparent": false,
+          "repeatDirection": "h",
+          "title": "Degraded lifecycle events",
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 27
+          },
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "${DS_CLOUDWATCH}"
+          },
+          "description": "Fail-soft path taken — investigate any non-empty output.",
+          "targets": [
+            {
+              "queryMode": "Logs",
+              "id": "",
+              "region": "default",
+              "refId": "I",
+              "queryLanguage": "CWLI",
+              "expression": "fields @timestamp, @message\n| filter @message like /kagero.lifecycle.degraded/\n| sort @timestamp desc\n| limit 200",
+              "logGroupNames": [
+                "$KAGERO_LOG_GROUP"
+              ],
+              "datasource": {
+                "type": "cloudwatch",
+                "uid": "${DS_CLOUDWATCH}"
+              }
+            }
+          ]
+        },
+        {
+          "type": "logs",
+          "transparent": false,
+          "repeatDirection": "h",
+          "title": "Degraded events — platform fallback",
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 36
+          },
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "${DS_CLOUDWATCH}"
+          },
+          "description": "stdout fallback copy of kagero.lifecycle.degraded events, read from the MicroVM's own platform log group — the only surviving record when the collector was down. CloudWatch only; on LGTM there is no stdout→Loki route, so this panel is 非対応.",
+          "targets": [
+            {
+              "queryMode": "Logs",
+              "id": "",
+              "region": "default",
+              "refId": "J",
+              "queryLanguage": "CWLI",
+              "expression": "fields @timestamp, @message\n| filter @message like /kagero.lifecycle.degraded/\n| sort @timestamp desc\n| limit 200",
+              "logGroupNames": [
+                "$KAGERO_PLATFORM_LOG_GROUP"
+              ],
+              "datasource": {
+                "type": "cloudwatch",
+                "uid": "${DS_CLOUDWATCH}"
+              }
+            }
+          ]
+        }
+      ],
+      "title": "Logs",
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "h": 1,
+        "w": 24
+      }
+    },
+    {
+      "type": "row",
+      "collapsed": false,
+      "id": 0,
+      "panels": [],
+      "title": "Traces",
+      "gridPos": {
+        "x": 0,
+        "y": 45,
+        "h": 1,
+        "w": 24
+      }
+    },
+    {
+      "type": "text",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "MicroVM lifecycle traces — 非対応",
+      "options": {
+        "mode": "markdown",
+        "content": "**このバックエンドでは非対応です。**\n\nthe kagero agent does not emit traces yet — no /v1/traces traffic exists to render."
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      }
+    }
+  ]
+}

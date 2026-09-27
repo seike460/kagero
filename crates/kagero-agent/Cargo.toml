@@ -1,0 +1,30 @@
+[package]
+name = "kagero-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "kagero agent: hook relay and telemetry supervisor running as PID 1 inside AWS Lambda MicroVMs"
+
+[[bin]]
+name = "kagero"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow = "1"
+hyper = { version = "1", features = ["server", "http1"] }
+# TokioIo only — connections are served by hyper's own http1::Builder.
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+libc = "0.2"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+base64 = "0.22"
+time = { version = "0.3", features = ["formatting", "macros"] }

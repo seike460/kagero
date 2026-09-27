@@ -1,0 +1,42 @@
+{
+  "groups": [
+    {
+      "name": "kagero-microvm",
+      "rules": [
+        {
+          "alert": "KageroDegradedLifecycle",
+          "expr": "sum(increase(kagero_microvm_lifecycle_transitions_total{kagero_lifecycle_event=\"degraded\"}[5m])) > 0",
+          "for": "300s",
+          "labels": {
+            "severity": "warning"
+          },
+          "annotations": {
+            "summary": "kagero agent took the degraded path (relay/flush/collector failure)"
+          }
+        },
+        {
+          "alert": "KageroNoMicrovmTelemetry",
+          "expr": "absent_over_time(kagero_microvm_running_seconds_total[10m])",
+          "for": "600s",
+          "labels": {
+            "severity": "warning"
+          },
+          "annotations": {
+            "summary": "no MicroVM telemetry reaching the backend while the fleet should be active"
+          }
+        },
+        {
+          "alert": "KageroSuspendDurationHigh",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(kagero_microvm_suspend_duration_seconds_bucket[5m]))) > 60",
+          "for": "900s",
+          "labels": {
+            "severity": "warning"
+          },
+          "annotations": {
+            "summary": "suspend duration p95 above 60s — resume path may be degrading"
+          }
+        }
+      ]
+    }
+  ]
+}

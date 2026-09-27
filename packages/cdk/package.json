@@ -1,0 +1,36 @@
+{
+  "name": "@kagero/cdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "pnpm --filter @kagero/semconv --filter @kagero/secrets build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kagero/durable-stitcher": "workspace:*",
+    "@kagero/k6-runner": "workspace:*"
+  },
+  "peerDependencies": {
+    "aws-cdk-lib": "^2.269.0",
+    "constructs": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "aws-cdk-lib": "2.269.0",
+    "constructs": "^10.4.2",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

@@ -1,0 +1,186 @@
+// kagero collector config — Grafana Alloy, LGTM backend (river).
+// Rendered at /run by the agent; KAGERO_* placeholders substituted.
+// Same semantics as collector/lgtm/collector.yaml.tmpl — synchronous
+// export, loopback OTLP in, identity stamped at resource level,
+// ids off metrics (ADR-008).
+//
+// NOTE: Alloy has no resource-attribute processor (upstream feature
+// request pending), so resource-level edits go through
+// otelcol.processor.transform with context = "resource". Verify with
+// `alloy run --dry-run` in PoC-04.
+
+otelcol.receiver.otlp "kagero_in" {
+  grpc { endpoint = "127.0.0.1:4317" }
+  http { endpoint = "127.0.0.1:{{KAGERO_OTLP_PORT}}" }
+
+  output {
+    metrics = [otelcol.processor.transform.metric_identity.input]
+    logs    = [otelcol.processor.transform.identity.input]
+    traces  = [otelcol.processor.transform.identity.input]
+  }
+}
+
+// Full identity at resource level for logs and traces (ids live here,
+// never on metrics). Sets overwrite whatever the app claimed.
+otelcol.processor.transform "identity" {
+  error_mode = "ignore"
+
+  trace_statements {
+    context = "resource"
+    statements = [
+      "set(attributes[\"service.name\"], \"kagero\")",
+      "set(attributes[\"service.instance.id\"], \"{{KAGERO_MICROVM_ID}}\")",
+      "set(attributes[\"faas.instance\"], \"{{KAGERO_MICROVM_ID}}\")",
+      "set(attributes[\"kagero.tenant.id\"], \"{{KAGERO_TENANT_ID}}\") where \"{{KAGERO_TENANT_ID}}\" != \"\"",
+      "set(attributes[\"kagero.session.id\"], \"{{KAGERO_SESSION_ID}}\") where \"{{KAGERO_SESSION_ID}}\" != \"\"",
+      "set(attributes[\"kagero.microvm.image.name\"], \"{{KAGERO_IMAGE_NAME}}\")",
+      "set(attributes[\"kagero.microvm.image.version\"], \"{{KAGERO_IMAGE_VERSION}}\")",
+      "set(attributes[\"kagero.microvm.size\"], \"{{KAGERO_SIZE}}\")",
+      "set(attributes[\"cloud.provider\"], \"aws\")",
+      "set(attributes[\"cloud.region\"], \"{{KAGERO_REGION}}\")",
+    ]
+  }
+
+  log_statements {
+    context = "resource"
+    statements = [
+      "set(attributes[\"service.name\"], \"kagero\")",
+      "set(attributes[\"service.instance.id\"], \"{{KAGERO_MICROVM_ID}}\")",
+      "set(attributes[\"faas.instance\"], \"{{KAGERO_MICROVM_ID}}\")",
+      "set(attributes[\"kagero.tenant.id\"], \"{{KAGERO_TENANT_ID}}\") where \"{{KAGERO_TENANT_ID}}\" != \"\"",
+      "set(attributes[\"kagero.session.id\"], \"{{KAGERO_SESSION_ID}}\") where \"{{KAGERO_SESSION_ID}}\" != \"\"",
+      "set(attributes[\"kagero.microvm.image.name\"], \"{{KAGERO_IMAGE_NAME}}\")",
+      "set(attributes[\"kagero.microvm.image.version\"], \"{{KAGERO_IMAGE_VERSION}}\")",
+      "set(attributes[\"kagero.microvm.size\"], \"{{KAGERO_SIZE}}\")",
+      "set(attributes[\"cloud.provider\"], \"aws\")",
+      "set(attributes[\"cloud.region\"], \"{{KAGERO_REGION}}\")",
+    ]
+  }
+
+  output {
+    logs   = [otelcol.exporter.otlphttp.lgtm.input]
+    traces = [otelcol.exporter.otlphttp.lgtm.input]
+  }
+}
+
+// Metrics: resource-level — stamp only the low-cardinality attributes
+// and delete every id-shaped key the app may have claimed (resource
+// attrs are what become Prometheus labels; ADR-008 is enforced here).
+otelcol.processor.transform "metric_identity" {
+  error_mode = "ignore"
+
+  metric_statements {
+    context = "resource"
+    statements = [
+      "set(attributes[\"service.name\"], \"kagero\")",
+      "set(attributes[\"kagero.microvm.image.name\"], \"{{KAGERO_IMAGE_NAME}}\")",
+      "set(attributes[\"kagero.microvm.image.version\"], \"{{KAGERO_IMAGE_VERSION}}\")",
+      "set(attributes[\"kagero.microvm.size\"], \"{{KAGERO_SIZE}}\")",
+      "set(attributes[\"cloud.provider\"], \"aws\")",
+      "set(attributes[\"cloud.region\"], \"{{KAGERO_REGION}}\")",
+      "delete_key(attributes, \"service.instance.id\")",
+      "delete_key(attributes, \"faas.instance\")",
+      "delete_key(attributes, \"kagero.tenant.id\")",
+      "delete_key(attributes, \"kagero.session.id\")",
+      "delete_key(attributes, \"kagero.suspend.duration_seconds\")",
+      "delete_key(attributes, \"kagero.microvm.id\")",
+      "delete_key(attributes, \"kagero.durable.execution.arn\")",
+      "delete_key(attributes, \"kagero.durable.execution.name\")",
+      "delete_key(attributes, \"kagero.durable.replay_count\")",
+      "delete_key(attributes, \"kagero.durable.step.name\")",
+      "delete_key(attributes, \"kagero.durable.attempt\")",
+      "delete_key(attributes, \"kagero.error\")",
+      "delete_key(attributes, \"kagero.usage.cause\")",
+      "delete_key(attributes, \"kagero.usage.running_seconds\")",
+      "delete_key(attributes, \"kagero.usage.burst_vcpu_seconds\")",
+      "delete_key(attributes, \"kagero.usage.burst_gib_seconds\")",
+      "delete_key(attributes, \"kagero.usage.suspend_seconds\")",
+      "delete_key(attributes, \"kagero.usage.suspends\")",
+      "delete_key(attributes, \"kagero.usage.resumes\")",
+      "delete_key(attributes, \"http.request.id\")",
+      "delete_key(attributes, \"enduser.id\")",
+    ]
+  }
+
+  // Datapoint level is a different context — same rule.
+  metric_statements {
+    context = "datapoint"
+    statements = [
+      "delete_key(attributes, \"service.instance.id\")",
+      "delete_key(attributes, \"faas.instance\")",
+      "delete_key(attributes, \"kagero.tenant.id\")",
+      "delete_key(attributes, \"kagero.session.id\")",
+      "delete_key(attributes, \"kagero.suspend.duration_seconds\")",
+      "delete_key(attributes, \"kagero.microvm.id\")",
+      "delete_key(attributes, \"kagero.durable.execution.arn\")",
+      "delete_key(attributes, \"kagero.durable.execution.name\")",
+      "delete_key(attributes, \"kagero.durable.replay_count\")",
+      "delete_key(attributes, \"kagero.durable.step.name\")",
+      "delete_key(attributes, \"kagero.durable.attempt\")",
+      "delete_key(attributes, \"kagero.error\")",
+      "delete_key(attributes, \"kagero.usage.cause\")",
+      "delete_key(attributes, \"kagero.usage.running_seconds\")",
+      "delete_key(attributes, \"kagero.usage.burst_vcpu_seconds\")",
+      "delete_key(attributes, \"kagero.usage.burst_gib_seconds\")",
+      "delete_key(attributes, \"kagero.usage.suspend_seconds\")",
+      "delete_key(attributes, \"kagero.usage.suspends\")",
+      "delete_key(attributes, \"kagero.usage.resumes\")",
+      "delete_key(attributes, \"http.request.id\")",
+      "delete_key(attributes, \"enduser.id\")",
+    ]
+  }
+
+  // Scope level is a third context — scope.attributes surface as
+  // otel_scope_* labels on Prometheus-compatible ingestion, and the app
+  // controls its own instrumentation scope.
+  metric_statements {
+    context = "scope"
+    statements = [
+      "delete_key(attributes, \"service.instance.id\")",
+      "delete_key(attributes, \"faas.instance\")",
+      "delete_key(attributes, \"kagero.tenant.id\")",
+      "delete_key(attributes, \"kagero.session.id\")",
+      "delete_key(attributes, \"kagero.suspend.duration_seconds\")",
+      "delete_key(attributes, \"kagero.microvm.id\")",
+      "delete_key(attributes, \"kagero.durable.execution.arn\")",
+      "delete_key(attributes, \"kagero.durable.execution.name\")",
+      "delete_key(attributes, \"kagero.durable.replay_count\")",
+      "delete_key(attributes, \"kagero.durable.step.name\")",
+      "delete_key(attributes, \"kagero.durable.attempt\")",
+      "delete_key(attributes, \"kagero.error\")",
+      "delete_key(attributes, \"kagero.usage.cause\")",
+      "delete_key(attributes, \"kagero.usage.running_seconds\")",
+      "delete_key(attributes, \"kagero.usage.burst_vcpu_seconds\")",
+      "delete_key(attributes, \"kagero.usage.burst_gib_seconds\")",
+      "delete_key(attributes, \"kagero.usage.suspend_seconds\")",
+      "delete_key(attributes, \"kagero.usage.suspends\")",
+      "delete_key(attributes, \"kagero.usage.resumes\")",
+      "delete_key(attributes, \"http.request.id\")",
+      "delete_key(attributes, \"enduser.id\")",
+    ]
+  }
+
+  output { metrics = [otelcol.exporter.otlphttp.lgtm.input] }
+}
+
+otelcol.auth.basic "lgtm" {
+  // Secret JSON keys: {"username":"...","password":"..."} — printable
+  // ASCII without " \ $ ` or newlines (see collector/README.md).
+  client_auth {
+    username = "{{KAGERO_SECRET:username}}"
+    password = "{{KAGERO_SECRET:password}}"
+  }
+}
+
+otelcol.exporter.otlphttp "lgtm" {
+  // One endpoint for all 3 signals assumes a unified OTLP gateway
+  // (otel-lgtm / Grafana Cloud OTLP endpoint).
+  client {
+    endpoint = "{{KAGERO_ENDPOINT_LGTM}}"
+    auth     = otelcol.auth.basic.lgtm.handler
+    timeout  = "5s"
+  }
+  // Synchronous export per ADR-006 — the app's flush means "delivered".
+  retry_on_failure { enabled = false }
+  sending_queue    { enabled = false }
+}

@@ -1,0 +1,182 @@
+# kagero sim collector config — mirror of collector/lgtm/collector.yaml.tmpl
+# without the basic-auth extension (the sim has no Secrets Manager).
+# Exports to the mock OTLP sink via a plain otlphttp exporter, so the E2E
+# exercises the REAL collector pipeline — including all three levels of
+# forbidden-attribute stripping — whenever KAGERO_SIM_COLLECTOR_BIN is set.
+#
+# Keep the strip lists in sync with the shipped templates: the agent's
+# templates_strip_every_forbidden_key drift test covers this file too.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:{{KAGERO_OTLP_PORT}}
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 128
+    spike_limit_mib: 32
+
+  resource/identity:
+    attributes:
+{{KAGERO_RESOURCE_ATTRS}}
+
+  resource/metric_identity:
+    attributes:
+{{KAGERO_METRIC_ATTRS}}
+
+  resource/strip_ids:
+    attributes:
+      - key: service.instance.id
+        action: delete
+      - key: faas.instance
+        action: delete
+      - key: kagero.tenant.id
+        action: delete
+      - key: kagero.session.id
+        action: delete
+      - key: kagero.suspend.duration_seconds
+        action: delete
+      - key: kagero.microvm.id
+        action: delete
+      - key: kagero.durable.execution.arn
+        action: delete
+      - key: kagero.durable.execution.name
+        action: delete
+      - key: kagero.durable.replay_count
+        action: delete
+      - key: kagero.durable.step.name
+        action: delete
+      - key: kagero.durable.attempt
+        action: delete
+      - key: kagero.error
+        action: delete
+      - key: kagero.usage.cause
+        action: delete
+      - key: kagero.usage.running_seconds
+        action: delete
+      - key: kagero.usage.burst_vcpu_seconds
+        action: delete
+      - key: kagero.usage.burst_gib_seconds
+        action: delete
+      - key: kagero.usage.suspend_seconds
+        action: delete
+      - key: kagero.usage.suspends
+        action: delete
+      - key: kagero.usage.resumes
+        action: delete
+      - key: http.request.id
+        action: delete
+      - key: enduser.id
+        action: delete
+
+  attributes/strip_ids:
+    actions:
+      - key: service.instance.id
+        action: delete
+      - key: faas.instance
+        action: delete
+      - key: kagero.tenant.id
+        action: delete
+      - key: kagero.session.id
+        action: delete
+      - key: kagero.suspend.duration_seconds
+        action: delete
+      - key: kagero.microvm.id
+        action: delete
+      - key: kagero.durable.execution.arn
+        action: delete
+      - key: kagero.durable.execution.name
+        action: delete
+      - key: kagero.durable.replay_count
+        action: delete
+      - key: kagero.durable.step.name
+        action: delete
+      - key: kagero.durable.attempt
+        action: delete
+      - key: kagero.error
+        action: delete
+      - key: kagero.usage.cause
+        action: delete
+      - key: kagero.usage.running_seconds
+        action: delete
+      - key: kagero.usage.burst_vcpu_seconds
+        action: delete
+      - key: kagero.usage.burst_gib_seconds
+        action: delete
+      - key: kagero.usage.suspend_seconds
+        action: delete
+      - key: kagero.usage.suspends
+        action: delete
+      - key: kagero.usage.resumes
+        action: delete
+      - key: http.request.id
+        action: delete
+      - key: enduser.id
+        action: delete
+
+  transform/strip_scope_ids:
+    error_mode: ignore
+    metric_statements:
+      - context: scope
+        statements:
+          - delete_key(attributes, "service.instance.id")
+          - delete_key(attributes, "faas.instance")
+          - delete_key(attributes, "kagero.tenant.id")
+          - delete_key(attributes, "kagero.session.id")
+          - delete_key(attributes, "kagero.suspend.duration_seconds")
+          - delete_key(attributes, "kagero.microvm.id")
+          - delete_key(attributes, "kagero.durable.execution.arn")
+          - delete_key(attributes, "kagero.durable.execution.name")
+          - delete_key(attributes, "kagero.durable.replay_count")
+          - delete_key(attributes, "kagero.durable.step.name")
+          - delete_key(attributes, "kagero.durable.attempt")
+          - delete_key(attributes, "kagero.error")
+          - delete_key(attributes, "kagero.usage.cause")
+          - delete_key(attributes, "kagero.usage.running_seconds")
+          - delete_key(attributes, "kagero.usage.burst_vcpu_seconds")
+          - delete_key(attributes, "kagero.usage.burst_gib_seconds")
+          - delete_key(attributes, "kagero.usage.suspend_seconds")
+          - delete_key(attributes, "kagero.usage.suspends")
+          - delete_key(attributes, "kagero.usage.resumes")
+          - delete_key(attributes, "http.request.id")
+          - delete_key(attributes, "enduser.id")
+
+exporters:
+  otlphttp/sim:
+    endpoint: "{{KAGERO_ENDPOINT_LGTM}}"
+    # The mock sink asserts on JSON bodies — protobuf (the default) and
+    # gzip compression would arrive unparseable.
+    encoding: json
+    compression: none
+    retry_on_failure:
+      enabled: false
+    sending_queue:
+      enabled: false
+    timeout: 5s
+
+service:
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      # The collector's own Prometheus self-metrics default to :8888 —
+      # a fixed port that collides with anything already bound there
+      # (including a stray collector from a previous run). Level "none"
+      # disables the self-metrics endpoint entirely.
+      level: none
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/metric_identity, resource/strip_ids, attributes/strip_ids, transform/strip_scope_ids]
+      exporters: [otlphttp/sim]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/identity]
+      exporters: [otlphttp/sim]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/identity]
+      exporters: [otlphttp/sim]

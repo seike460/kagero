@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "currency": "USD",
+  "generatedBy": "hand-curated (AWS Price List API sync is roadmap work — ADR-009)",
+  "entries": [
+    {
+      "service": "microvm",
+      "region": "us-east-1",
+      "arch": "arm64",
+      "effectiveFrom": "2026-06-09",
+      "verified": true,
+      "source": "AWS Lambda pricing page (2026-09); ARM prices only were published",
+      "prices": {
+        "memoryGbSecond": 0.0000036667,
+        "vcpuSecond": 0.0000276944,
+        "snapshotLoadGb": 0.00155,
+        "snapshotWriteGb": 0.0038,
+        "storageGbMonth": 0.08
+      }
+    },
+    {
+      "service": "microvm",
+      "region": "ap-northeast-1",
+      "arch": "arm64",
+      "effectiveFrom": "2026-06-09",
+      "verified": false,
+      "source": "UNVERIFIED — Tokyo prices not confirmable on the pricing page (PoC-09); us-east-1 values used as placeholder",
+      "prices": {
+        "memoryGbSecond": 0.0000036667,
+        "vcpuSecond": 0.0000276944,
+        "snapshotLoadGb": 0.00155,
+        "snapshotWriteGb": 0.0038,
+        "storageGbMonth": 0.08
+      }
+    },
+    {
+      "service": "lambda",
+      "region": "*",
+      "arch": "x86_64",
+      "effectiveFrom": "2021-11-29",
+      "verified": true,
+      "source": "AWS Lambda pricing page (2026-09); on-demand x86, excl. free tier",
+      "prices": {
+        "request": 0.0000002,
+        "gbSecond": 0.0000166667,
+        "ephemeralStorageGbSecond": 0.0000000309
+      }
+    },
+    {
+      "service": "lambda",
+      "region": "*",
+      "arch": "arm64",
+      "effectiveFrom": "2022-05-01",
+      "verified": true,
+      "source": "AWS Lambda pricing page (2026-09); Graviton2, excl. free tier",
+      "prices": {
+        "request": 0.0000002,
+        "gbSecond": 0.0000133334,
+        "ephemeralStorageGbSecond": 0.0000000309
+      }
+    },
+    {
+      "service": "managed-instances",
+      "region": "*",
+      "arch": "*",
+      "effectiveFrom": "2025-11-30",
+      "verified": true,
+      "source": "AWS Lambda Managed Instances launch notes (2025-11-30): $0.20/1M requests + 15% management fee on EC2",
+      "prices": {
+        "request": 0.0000002,
+        "ec2ManagementFeeRate": 0.15
+      }
+    },
+    {
+      "service": "durable",
+      "region": "*",
+      "arch": "*",
+      "effectiveFrom": "2025-12-02",
+      "verified": true,
+      "source": "AWS Lambda Durable Functions pricing (2025-12-02 GA): $8/1M operations",
+      "prices": {
+        "operation": 0.000008
+      }
+    }
+  ]
+}

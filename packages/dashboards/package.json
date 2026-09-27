@@ -1,0 +1,32 @@
+{
+  "name": "@kagero/dashboards",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "generate": "tsx src/generate.ts"
+  },
+  "dependencies": {
+    "@grafana/grafana-foundation-sdk": "11.6.0-cogv0.0.x.1769699379",
+    "@kagero/pricing": "workspace:*",
+    "@kagero/semconv": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

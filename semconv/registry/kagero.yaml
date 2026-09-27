@@ -1,0 +1,462 @@
+groups:
+  - id: registry.kagero.microvm
+    type: attribute_group
+    brief: >
+      Attributes describing the Lambda MicroVM image and instance that produced
+      telemetry. Stable, low-cardinality values only; per-instance identifiers
+      never go on metric labels (ADR-008).
+    attributes:
+      - id: kagero.microvm.image.name
+        type: string
+        stability: development
+        brief: Name of the MicroVM image the instance was launched from.
+        examples: ["sandbox-python"]
+        annotations:
+          kagero:
+            metric_label: allowed
+      - id: kagero.microvm.image.version
+        type: string
+        stability: development
+        brief: Version of the MicroVM image.
+        examples: ["3"]
+        annotations:
+          kagero:
+            metric_label: allowed
+      - id: kagero.microvm.size
+        type: string
+        stability: development
+        brief: Configured baseline size of the MicroVM.
+        examples: ["0.5gb", "2gb", "8gb"]
+        annotations:
+          kagero:
+            metric_label: allowed
+
+  - id: registry.kagero.lifecycle
+    type: attribute_group
+    brief: Attributes for MicroVM lifecycle transitions.
+    attributes:
+      - id: kagero.lifecycle.event
+        type:
+          members:
+            - id: run
+              value: run
+              stability: development
+            - id: suspend
+              value: suspend
+              stability: development
+            - id: resume
+              value: resume
+              stability: development
+            - id: terminate
+              value: terminate
+              stability: development
+            - id: degraded
+              value: degraded
+              stability: development
+              brief: A hook or telemetry step failed at runtime; the workload continued (ADR-004).
+        stability: development
+        brief: Lifecycle event that occurred on the MicroVM. /ready and
+          /validate are build hooks and never emit lifecycle events (build
+          time is quiescent), so they are not members.
+        examples: ["run", "suspend"]
+        annotations:
+          kagero:
+            metric_label: allowed
+
+  - id: registry.kagero.tenancy
+    type: attribute_group
+    brief: >
+      Optional tenancy attributes. Attached only when the app declares them
+      explicitly; logs and traces only, never metrics (ADR-008).
+    attributes:
+      - id: kagero.tenant.id
+        type: string
+        stability: development
+        brief: Tenant identifier extracted from runHookPayload when configured.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.session.id
+        type: string
+        stability: development
+        brief: Session identifier extracted from runHookPayload when configured.
+        annotations:
+          kagero:
+            metric_label: forbidden
+
+  - id: registry.kagero.state
+    type: attribute_group
+    brief: Attributes describing agent-side observations of the lifecycle.
+    attributes:
+      - id: kagero.suspend.duration_seconds
+        type: double
+        stability: development
+        brief: Wall-clock seconds the MicroVM spent suspended, observed on resume.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.error
+        type: string
+        stability: development
+        brief: Failure detail on kagero.lifecycle.degraded records. Error
+          text is unbounded — never a metric label.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.app.result
+        type:
+          members:
+            - id: ok
+              value: ok
+              stability: development
+            - id: unimplemented
+              value: unimplemented
+              stability: development
+              brief: The app returned 404; treated as not implemented.
+            - id: no_listener
+              value: no_listener
+              stability: development
+              brief: The app does not listen on the app hook port.
+            - id: failed
+              value: failed
+              stability: development
+              brief: Relay failed (connect refused, timeout, non-2xx).
+        stability: development
+        brief: Outcome of relaying a hook to the app, on lifecycle event records.
+        annotations:
+          kagero:
+            metric_label: allowed
+      - id: kagero.app.exited
+        type: boolean
+        stability: development
+        brief: Whether the app process had already exited when the hook ran.
+        annotations:
+          kagero:
+            metric_label: allowed
+      - id: kagero.hook.name
+        type: string
+        stability: development
+        brief: Name of the lifecycle hook being relayed.
+        examples: ["ready", "run", "suspend", "terminate"]
+        annotations:
+          kagero:
+            metric_label: allowed
+      - id: kagero.hook.status
+        type:
+          members:
+            - id: ok
+              value: ok
+              stability: development
+            - id: timeout
+              value: timeout
+              stability: development
+            - id: error
+              value: error
+              stability: development
+            - id: unimplemented
+              value: unimplemented
+              stability: development
+              brief: The app returned 404; treated as not implemented.
+        stability: development
+        brief: Outcome of a relayed hook.
+        annotations:
+          kagero:
+            metric_label: allowed
+
+  - id: metric.kagero.microvm.running_seconds
+    type: metric
+    metric_name: kagero.microvm.running_seconds
+    instrument: counter
+    unit: s
+    stability: development
+    brief: Seconds the MicroVM spent in RUNNING state, observed by the agent.
+
+  - id: metric.kagero.microvm.burst_vcpu_seconds
+    type: metric
+    metric_name: kagero.microvm.burst_vcpu_seconds
+    instrument: counter
+    unit: "{vcpu}s"
+    stability: development
+    brief: vCPU-seconds consumed above the configured baseline.
+
+  - id: metric.kagero.microvm.burst_memory_gib_seconds
+    type: metric
+    metric_name: kagero.microvm.burst_memory_gib_seconds
+    instrument: counter
+    unit: "{gib}s"
+    stability: development
+    brief: GiB-seconds of memory consumed above the configured baseline.
+      The `{gib}` annotation keeps the Prometheus OTLP unit suffix at
+      "_seconds" (already the name suffix), so translation inserts nothing.
+
+  - id: metric.kagero.microvm.lifecycle_transitions
+    type: metric
+    metric_name: kagero.microvm.lifecycle_transitions
+    instrument: counter
+    unit: "{transition}"
+    stability: development
+    brief: Number of lifecycle transitions, labelled by kagero.lifecycle.event.
+
+  - id: metric.kagero.microvm.suspend_duration_seconds
+    type: metric
+    metric_name: kagero.microvm.suspend_duration_seconds
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: Distribution of suspend-to-resume wall-clock durations.
+
+  - id: metric.kagero.microvm.hook_results
+    type: metric
+    metric_name: kagero.microvm.hook_results
+    instrument: counter
+    unit: "{hook}"
+    stability: development
+    brief: Runtime-hook relay outcomes, labelled by kagero.hook.name and
+      kagero.hook.status.
+
+  - id: registry.kagero.usage
+    type: attribute_group
+    brief: >
+      Per-snapshot usage fields on kagero.usage.summary log records. They
+      are snapshot values for one MicroVM — as metric labels they would
+      explode cardinality, so all are forbidden (ADR-008).
+    attributes:
+      - id: kagero.usage.cause
+        type:
+          members:
+            - id: suspend
+              value: suspend
+              stability: development
+            - id: terminate
+              value: terminate
+              stability: development
+        stability: development
+        brief: Which hook produced the summary.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.usage.running_seconds
+        type: double
+        stability: development
+        brief: RUNNING wall-clock seconds since /run.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.usage.burst_vcpu_seconds
+        type: double
+        stability: development
+        brief: vCPU-seconds above the MicroVM baseline.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.usage.burst_gib_seconds
+        type: double
+        stability: development
+        brief: GiB-seconds above the MicroVM baseline.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.usage.suspend_seconds
+        type: double
+        stability: development
+        brief: Total seconds spent suspended.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.usage.suspends
+        type: int
+        stability: development
+        brief: /suspend count this boot.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.usage.resumes
+        type: int
+        stability: development
+        brief: /resume count this boot.
+        annotations:
+          kagero:
+            metric_label: forbidden
+
+  - id: registry.kagero.durable
+    type: attribute_group
+    brief: >
+      Attributes for Durable Functions executions assembled into traces
+      by the stitcher (module D). Execution identifiers are span/log
+      attributes only — never metric labels (ADR-008).
+    attributes:
+      - id: kagero.durable.execution.arn
+        type: string
+        stability: development
+        brief: ARN of the durable execution this span belongs to.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.durable.execution.name
+        type: string
+        stability: development
+        brief: Human-readable name of the durable execution.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.durable.replay_count
+        type: int
+        stability: development
+        brief: Number of replays (re-executions) observed in the assembled history.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.durable.step.kind
+        type:
+          members:
+            - id: step
+              value: step
+              stability: development
+            - id: wait
+              value: wait
+              stability: development
+            - id: callback
+              value: callback
+              stability: development
+            - id: retry
+              value: retry
+              stability: development
+            - id: chained
+              value: chained
+              stability: development
+            - id: invoke
+              value: invoke
+              stability: development
+            - id: context
+              value: context
+              stability: development
+        stability: development
+        brief: Kind of durable step a span represents.
+        annotations:
+          kagero:
+            metric_label: allowed
+      - id: kagero.durable.step.name
+        type: string
+        stability: development
+        brief: Name of the durable step (user-defined).
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.durable.attempt
+        type: int
+        stability: development
+        brief: Attempt number for retried steps.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: kagero.durable.status
+        type:
+          members:
+            - id: succeeded
+              value: succeeded
+              stability: development
+            - id: failed
+              value: failed
+              stability: development
+            - id: timed_out
+              value: timed_out
+              stability: development
+            - id: stopped
+              value: stopped
+              stability: development
+            - id: running
+              value: running
+              stability: development
+        stability: development
+        brief: Terminal or current status of a durable execution or step.
+        annotations:
+          kagero:
+            metric_label: allowed
+
+  - id: metric.kagero.durable.executions
+    type: metric
+    metric_name: kagero.durable.executions
+    instrument: counter
+    unit: "{execution}"
+    stability: development
+    brief: Completed durable executions assembled by the stitcher, labelled by kagero.durable.status.
+
+  - id: metric.kagero.durable.execution.duration_seconds
+    type: metric
+    metric_name: kagero.durable.execution.duration_seconds
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: Wall-clock duration of assembled durable executions.
+
+  - id: metric.kagero.durable.replays
+    type: metric
+    metric_name: kagero.durable.replays
+    instrument: counter
+    unit: "{replay}"
+    stability: development
+    brief: Replay (re-execution) events observed across assembled executions.
+
+  - id: registry.kagero.k6
+    type: attribute_group
+    brief: >
+      Attributes identifying a distributed k6 load-test run (module C).
+      run.id and shard.id are the test coordinates — they are the metric
+      dimensions, bounded by test executions, not request cardinality,
+      so they are allowed as labels/dimensions by ADR-008's letter.
+    attributes:
+      - id: kagero.k6.run.id
+        type: string
+        stability: development
+        brief: Identifier of one distributed load-test run.
+        annotations:
+          kagero:
+            metric_label: allowed
+      - id: kagero.k6.shard.id
+        type: string
+        stability: development
+        brief: Shard index (0-based) of a k6 segment within a run.
+        annotations:
+          kagero:
+            metric_label: allowed
+
+  - id: registry.external.identity
+    type: attribute_group
+    brief: Standard OpenTelemetry attributes kagero populates.
+    attributes:
+      - id: service.name
+        type: string
+        stability: stable
+        brief: Constant "kagero" — anchors the agent's log streams and
+          metric series (Loki {service_name="kagero"}). Safe on metrics.
+        annotations:
+          kagero:
+            metric_label: allowed
+      - id: service.instance.id
+        type: string
+        stability: stable
+        brief: MicroVM instance identifier received at /run (microvmId). Logs and traces only.
+        annotations:
+          kagero:
+            metric_label: forbidden
+      - id: cloud.provider
+        type: string
+        stability: stable
+        brief: Always "aws".
+        annotations:
+          kagero:
+            metric_label: allowed
+      - id: cloud.region
+        type: string
+        stability: stable
+        brief: AWS region the MicroVM runs in.
+        annotations:
+          kagero:
+            metric_label: allowed
+      - id: faas.instance
+        type: string
+        stability: development
+        brief: MicroVM instance identifier (faas-facing copy of service.instance.id).
+        annotations:
+          kagero:
+            metric_label: forbidden

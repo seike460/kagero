@@ -1,0 +1,34 @@
+{
+  "spec": "kagero-alerts/v1",
+  "backend": "cloudwatch",
+  "note": "CloudWatch alarms cannot evaluate raw PromQL. These rules exist for parity with the LGTM rule file; provision equivalents as CloudWatch alarms from CDK (v0.5) or Metrics Insights.",
+  "rules": [
+    {
+      "name": "KageroDegradedLifecycle",
+      "expr": "sum(increase(kagero_microvm_lifecycle_transitions_total{kagero_lifecycle_event=\"degraded\"}[5m])) > 0",
+      "forSeconds": 300,
+      "severity": "warning",
+      "summary": "kagero agent took the degraded path (relay/flush/collector failure)",
+      "supported": false,
+      "unsupportedReason": "CloudWatch alarms do not evaluate PromQL — provision via CDK (v0.5)."
+    },
+    {
+      "name": "KageroNoMicrovmTelemetry",
+      "expr": "absent_over_time(kagero_microvm_running_seconds_total[10m])",
+      "forSeconds": 600,
+      "severity": "warning",
+      "summary": "no MicroVM telemetry reaching the backend while the fleet should be active",
+      "supported": false,
+      "unsupportedReason": "CloudWatch alarms do not evaluate PromQL — provision via CDK (v0.5)."
+    },
+    {
+      "name": "KageroSuspendDurationHigh",
+      "expr": "histogram_quantile(0.95, sum by (le) (rate(kagero_microvm_suspend_duration_seconds_bucket[5m]))) > 60",
+      "forSeconds": 900,
+      "severity": "warning",
+      "summary": "suspend duration p95 above 60s — resume path may be degrading",
+      "supported": false,
+      "unsupportedReason": "CloudWatch alarms do not evaluate PromQL — provision via CDK (v0.5)."
+    }
+  ]
+}

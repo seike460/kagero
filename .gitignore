@@ -1,0 +1,28 @@
+# Rust
+target/
+
+# Node.js / TypeScript
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# AWS CDK (cdk.context.json is intentionally tracked)
+cdk.out/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# PoC raw outputs stay local; summaries go to docs/poc/*.md
+poc-output/
+
+# OS / editor
+.DS_Store
+*.log
+__pycache__/
+*.pyc
+
+# otelcol-contrib binary downloaded for the sim real-collector E2E
+otelcol-contrib*

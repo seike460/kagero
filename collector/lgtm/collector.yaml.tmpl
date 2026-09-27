@@ -1,0 +1,203 @@
+# kagero collector config — LGTM backend (OTel/Rotel compatible YAML).
+#
+# Rendered by the agent at /run (or /ready in build-check); every
+# KAGERO_* placeholder is substituted by crates/kagero-agent.
+# Written to KAGERO_COLLECTOR_CONFIG_OUT with mode 0600 (may embed secrets).
+#
+# Synchronous export per ADR-006: no batch processor, no retry queue —
+# when the app's flush returns, the backend has already answered.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        # Loopback only — the untrusted app is the only OTLP client.
+        endpoint: 127.0.0.1:{{KAGERO_OTLP_PORT}}
+      grpc:
+        endpoint: 127.0.0.1:4317
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 128
+    spike_limit_mib: 32
+
+  # Identity stamped at RESOURCE level by the collector — the app's
+  # self-claims are overwritten (threat model: 自己申告として扱う).
+  # Logs and traces get the full set including instance/tenancy ids.
+  resource/identity:
+    attributes:
+{{KAGERO_RESOURCE_ATTRS}}
+
+  # Metrics keep only low-cardinality resource attributes (ADR-008).
+  resource/metric_identity:
+    attributes:
+{{KAGERO_METRIC_ATTRS}}
+
+  # Delete every id-shaped key the app may have claimed on its OWN
+  # resource — resource attrs get promoted to metric labels on
+  # Prometheus-style ingestion, so this is where ADR-008 is enforced.
+  resource/strip_ids:
+    attributes:
+      - key: service.instance.id
+        action: delete
+      - key: faas.instance
+        action: delete
+      - key: kagero.tenant.id
+        action: delete
+      - key: kagero.session.id
+        action: delete
+      - key: kagero.suspend.duration_seconds
+        action: delete
+      - key: kagero.microvm.id
+        action: delete
+      - key: kagero.durable.execution.arn
+        action: delete
+      - key: kagero.durable.execution.name
+        action: delete
+      - key: kagero.durable.replay_count
+        action: delete
+      - key: kagero.durable.step.name
+        action: delete
+      - key: kagero.durable.attempt
+        action: delete
+      - key: kagero.error
+        action: delete
+      - key: kagero.usage.cause
+        action: delete
+      - key: kagero.usage.running_seconds
+        action: delete
+      - key: kagero.usage.burst_vcpu_seconds
+        action: delete
+      - key: kagero.usage.burst_gib_seconds
+        action: delete
+      - key: kagero.usage.suspend_seconds
+        action: delete
+      - key: kagero.usage.suspends
+        action: delete
+      - key: kagero.usage.resumes
+        action: delete
+      - key: http.request.id
+        action: delete
+      - key: enduser.id
+        action: delete
+
+  # Same strip at datapoint level — resource attrs and datapoint attrs
+  # are different levels, and an id must not survive on either.
+  attributes/strip_ids:
+    actions:
+      - key: service.instance.id
+        action: delete
+      - key: faas.instance
+        action: delete
+      - key: kagero.tenant.id
+        action: delete
+      - key: kagero.session.id
+        action: delete
+      - key: kagero.suspend.duration_seconds
+        action: delete
+      - key: kagero.microvm.id
+        action: delete
+      - key: kagero.durable.execution.arn
+        action: delete
+      - key: kagero.durable.execution.name
+        action: delete
+      - key: kagero.durable.replay_count
+        action: delete
+      - key: kagero.durable.step.name
+        action: delete
+      - key: kagero.durable.attempt
+        action: delete
+      - key: kagero.error
+        action: delete
+      - key: kagero.usage.cause
+        action: delete
+      - key: kagero.usage.running_seconds
+        action: delete
+      - key: kagero.usage.burst_vcpu_seconds
+        action: delete
+      - key: kagero.usage.burst_gib_seconds
+        action: delete
+      - key: kagero.usage.suspend_seconds
+        action: delete
+      - key: kagero.usage.suspends
+        action: delete
+      - key: kagero.usage.resumes
+        action: delete
+      - key: http.request.id
+        action: delete
+      - key: enduser.id
+        action: delete
+
+  # Scope-level strip — scope.attributes become otel_scope_* labels on
+  # Prometheus-compatible ingestion, and the app can put ids there too.
+  # A third copy of the same list, at the third level (ADR-008).
+  transform/strip_scope_ids:
+    error_mode: ignore
+    metric_statements:
+      - context: scope
+        statements:
+          - delete_key(attributes, "service.instance.id")
+          - delete_key(attributes, "faas.instance")
+          - delete_key(attributes, "kagero.tenant.id")
+          - delete_key(attributes, "kagero.session.id")
+          - delete_key(attributes, "kagero.suspend.duration_seconds")
+          - delete_key(attributes, "kagero.microvm.id")
+          - delete_key(attributes, "kagero.durable.execution.arn")
+          - delete_key(attributes, "kagero.durable.execution.name")
+          - delete_key(attributes, "kagero.durable.replay_count")
+          - delete_key(attributes, "kagero.durable.step.name")
+          - delete_key(attributes, "kagero.durable.attempt")
+          - delete_key(attributes, "kagero.error")
+          - delete_key(attributes, "kagero.usage.cause")
+          - delete_key(attributes, "kagero.usage.running_seconds")
+          - delete_key(attributes, "kagero.usage.burst_vcpu_seconds")
+          - delete_key(attributes, "kagero.usage.burst_gib_seconds")
+          - delete_key(attributes, "kagero.usage.suspend_seconds")
+          - delete_key(attributes, "kagero.usage.suspends")
+          - delete_key(attributes, "kagero.usage.resumes")
+          - delete_key(attributes, "http.request.id")
+          - delete_key(attributes, "enduser.id")
+
+extensions:
+  basicauth/lgtm:
+    client_auth:
+      # Secret JSON keys — the /run SecretString must look like
+      # {"username":"...","password":"..."} (documented in collector/README.md).
+      # Secrets must be printable ASCII without " \ $ ` or newlines —
+      # see collector/README.md ("Secret shape").
+      username: "{{KAGERO_SECRET:username}}"
+      password: "{{KAGERO_SECRET:password}}"
+
+exporters:
+  otlphttp/lgtm:
+    # One endpoint for all 3 signals assumes a unified OTLP gateway
+    # (otel-lgtm / Grafana Cloud OTLP endpoint).
+    endpoint: "{{KAGERO_ENDPOINT_LGTM}}"
+    auth:
+      authenticator: basicauth/lgtm
+    # Synchronous: caller's flush completes only when the backend answers.
+    retry_on_failure:
+      enabled: false
+    sending_queue:
+      enabled: false
+    timeout: 5s
+
+service:
+  telemetry:
+    logs:
+      level: warn
+  extensions: [basicauth/lgtm]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/metric_identity, resource/strip_ids, attributes/strip_ids, transform/strip_scope_ids]
+      exporters: [otlphttp/lgtm]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/identity]
+      exporters: [otlphttp/lgtm]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/identity]
+      exporters: [otlphttp/lgtm]

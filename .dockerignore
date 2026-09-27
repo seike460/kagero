@@ -1,0 +1,8 @@
+.env*
+target/
+node_modules/
+**/node_modules/
+**/dist/
+cdk.out/
+.git/
+*.tsbuildinfo
