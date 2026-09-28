@@ -2,44 +2,84 @@
  * Assertion helpers over the evidence the simulator collects: OTLP
  * captures and the app's hook-arrival log.
  */
-import { METRIC_LABEL_FORBIDDEN } from "@kagero/semconv";
+import { ATTR_KAGERO_LIFECYCLE_EVENT, METRIC_LABEL_FORBIDDEN } from "@kagero/semconv";
 import type { HookResult } from "./hooks.js";
 import type { OtlpCapture } from "./mock-otlp.js";
+
+/** OTLP metric data kinds that carry `dataPoints`. */
+const POINT_KINDS = ["sum", "gauge", "histogram", "exponentialHistogram", "summary"] as const;
+
+interface OtlpMetric {
+  name?: unknown;
+  sum?: { aggregationTemporality?: unknown; isMonotonic?: unknown };
+}
+
+interface OtlpDataPoint {
+  attributes?: unknown;
+}
+
+const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
+const isObject = (v: unknown): v is object => typeof v === "object" && v !== null;
+
+/** Every metric in one OTLP metrics payload, across all resources and scopes. */
+function* metricsIn(payload: unknown): Generator<OtlpMetric> {
+  for (const rm of asArray((payload as { resourceMetrics?: unknown })?.resourceMetrics)) {
+    for (const sm of asArray((rm as { scopeMetrics?: unknown })?.scopeMetrics)) {
+      for (const m of asArray((sm as { metrics?: unknown })?.metrics)) {
+        if (isObject(m)) yield m;
+      }
+    }
+  }
+}
+
+/** Every metric across the captured /v1/metrics payloads. */
+function* capturedMetrics(captures: OtlpCapture[]): Generator<OtlpMetric> {
+  for (const c of captures) {
+    if (c.path === "/v1/metrics") yield* metricsIn(c.body);
+  }
+}
+
+/** Every datapoint of one metric, whatever its data kind. */
+function* dataPointsOf(metric: OtlpMetric): Generator<OtlpDataPoint> {
+  for (const kind of POINT_KINDS) {
+    const data = (metric as Record<string, unknown>)[kind] as { dataPoints?: unknown } | undefined;
+    for (const p of asArray(data?.dataPoints)) {
+      if (isObject(p)) yield p;
+    }
+  }
+}
+
+/** String value of attribute `key` in an OTLP attribute list. */
+function stringAttr(attrs: unknown, key: string): string | undefined {
+  for (const a of asArray(attrs)) {
+    const attr = a as { key?: unknown; value?: { stringValue?: unknown } } | null;
+    if (attr?.key === key && typeof attr.value?.stringValue === "string") {
+      return attr.value.stringValue;
+    }
+  }
+  return undefined;
+}
 
 /** Every attribute key anywhere inside an OTLP metrics payload:
  * resource attributes, instrumentation-scope attributes, AND datapoint
  * attributes (all three can end up as labels). */
 export function metricAttrKeys(payload: unknown): string[] {
   const keys: string[] = [];
-  const attrs = (list: unknown) => {
-    if (!Array.isArray(list)) return;
-    for (const a of list) {
-      const key = (a as { key?: unknown })?.key;
+  const collect = (attrs: unknown) => {
+    for (const a of asArray(attrs)) {
+      const key = (a as { key?: unknown } | null)?.key;
       if (typeof key === "string") keys.push(key);
     }
   };
-  const walkMetrics = (m: unknown) => {
-    if (!Array.isArray(m)) return;
-    for (const metric of m) {
-      const data = (metric as Record<string, unknown>) ?? {};
-      for (const kind of ["sum", "gauge", "histogram", "exponentialHistogram", "summary"]) {
-        const pts = (data[kind] as { dataPoints?: unknown[] })?.dataPoints;
-        if (Array.isArray(pts))
-          for (const p of pts) attrs((p as { attributes?: unknown }).attributes);
-      }
+  for (const rm of asArray((payload as { resourceMetrics?: unknown })?.resourceMetrics)) {
+    collect((rm as { resource?: { attributes?: unknown } })?.resource?.attributes);
+    for (const sm of asArray((rm as { scopeMetrics?: unknown })?.scopeMetrics)) {
+      collect((sm as { scope?: { attributes?: unknown } })?.scope?.attributes);
     }
-  };
-  const rms = (payload as { resourceMetrics?: unknown[] })?.resourceMetrics;
-  if (Array.isArray(rms)) {
-    for (const rm of rms) {
-      attrs((rm as { resource?: { attributes?: unknown } })?.resource?.attributes);
-      const scopes = (rm as { scopeMetrics?: unknown[] })?.scopeMetrics;
-      if (Array.isArray(scopes))
-        for (const s of scopes) {
-          attrs((s as { scope?: { attributes?: unknown } })?.scope?.attributes);
-          walkMetrics((s as { metrics?: unknown }).metrics);
-        }
-    }
+  }
+  for (const m of metricsIn(payload)) {
+    for (const p of dataPointsOf(m)) collect(p.attributes);
   }
   return keys;
 }
@@ -89,17 +129,8 @@ export function resourceAttrValues(captures: OtlpCapture[], path: string, key: s
 /** Metric names found across all captured /v1/metrics payloads. */
 export function metricNames(captures: OtlpCapture[]): string[] {
   const names = new Set<string>();
-  for (const c of captures) {
-    if (c.path !== "/v1/metrics") continue;
-    const rms = (c.body as { resourceMetrics?: unknown[] })?.resourceMetrics ?? [];
-    for (const rm of rms) {
-      const scopes = (rm as { scopeMetrics?: unknown[] })?.scopeMetrics ?? [];
-      for (const s of scopes) {
-        for (const m of (s as { metrics?: { name?: string }[] }).metrics ?? []) {
-          if (m?.name) names.add(m.name);
-        }
-      }
-    }
+  for (const m of capturedMetrics(captures)) {
+    if (typeof m.name === "string" && m.name) names.add(m.name);
   }
   return [...names];
 }
@@ -126,27 +157,9 @@ export function isAppHookLog(c: OtlpCapture | undefined, hook: string): boolean 
 
 export function isLifecycle(c: OtlpCapture | undefined, event: string): boolean {
   if (c?.path !== "/v1/metrics") return false;
-  const rms = (c.body as { resourceMetrics?: unknown[] })?.resourceMetrics ?? [];
-  for (const rm of rms) {
-    const scopes = (rm as { scopeMetrics?: unknown[] })?.scopeMetrics ?? [];
-    for (const s of scopes) {
-      const metrics = (s as { metrics?: unknown[] })?.metrics ?? [];
-      for (const m of metrics) {
-        const data = (m as Record<string, unknown>) ?? {};
-        for (const kind of ["sum", "gauge", "histogram", "exponentialHistogram", "summary"]) {
-          const pts = (data[kind] as { dataPoints?: unknown[] })?.dataPoints ?? [];
-          for (const p of pts) {
-            const attrs =
-              (p as { attributes?: { key?: string; value?: { stringValue?: string } }[] })
-                ?.attributes ?? [];
-            for (const a of attrs) {
-              if (a.key === "kagero.lifecycle.event" && a.value?.stringValue === event) {
-                return true;
-              }
-            }
-          }
-        }
-      }
+  for (const m of metricsIn(c.body)) {
+    for (const p of dataPointsOf(m)) {
+      if (stringAttr(p.attributes, ATTR_KAGERO_LIFECYCLE_EVENT) === event) return true;
     }
   }
   return false;
@@ -163,21 +176,10 @@ export function isLifecycle(c: OtlpCapture | undefined, event: string): boolean 
  */
 export function nonMonotonicSumNames(captures: OtlpCapture[]): string[] {
   const bad = new Set<string>();
-  for (const c of captures) {
-    if (c.path !== "/v1/metrics") continue;
-    const rms = (c.body as { resourceMetrics?: unknown[] })?.resourceMetrics ?? [];
-    for (const rm of rms) {
-      const scopes = (rm as { scopeMetrics?: unknown[] })?.scopeMetrics ?? [];
-      for (const s of scopes) {
-        for (const m of (s as { metrics?: { name?: string; sum?: unknown }[] }).metrics ?? []) {
-          const sum = m?.sum as
-            | { aggregationTemporality?: number; isMonotonic?: boolean }
-            | undefined;
-          if (sum && !(sum.aggregationTemporality === 2 && sum.isMonotonic === true)) {
-            bad.add(m.name ?? "?");
-          }
-        }
-      }
+  for (const m of capturedMetrics(captures)) {
+    const sum = m.sum;
+    if (sum && !(sum.aggregationTemporality === 2 && sum.isMonotonic === true)) {
+      bad.add(typeof m.name === "string" ? m.name : "?");
     }
   }
   return [...bad];

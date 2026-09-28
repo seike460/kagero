@@ -103,4 +103,28 @@ describe("metricAttrKeys", () => {
     );
     expect(keys.sort()).toEqual(["a", "b", "c"]);
   });
+
+  it("reads the datapoints of every metric data kind", () => {
+    const metric = (kind: string, key: string) => ({
+      name: key,
+      [kind]: { dataPoints: [{ attributes: [{ key }] }] },
+    });
+    const keys = metricAttrKeys({
+      resourceMetrics: [
+        {
+          scopeMetrics: [
+            {
+              metrics: [
+                metric("gauge", "g"),
+                metric("histogram", "h"),
+                metric("exponentialHistogram", "e"),
+                metric("summary", "s"),
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(keys.sort()).toEqual(["e", "g", "h", "s"]);
+  });
 });
