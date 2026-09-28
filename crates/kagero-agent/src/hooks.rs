@@ -11,7 +11,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -21,7 +21,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::app::{App, RelayOutcome};
 use crate::collector::{Collector, RenderContext};
-use crate::config::Config;
+use crate::config::{Config, PeerRule};
 use crate::identity::{Identity, identity_from_run_body};
 use crate::process::Reaper;
 use crate::secrets::fetch_secret;
@@ -630,6 +630,19 @@ fn hook_status(o: &RelayOutcome) -> sem::HookStatus {
     }
 }
 
+/// Whether `ip` may call the hook port.
+fn peer_allowed(allow: &[PeerRule], ip: IpAddr) -> bool {
+    if allow.is_empty() {
+        // No allowlist: the strongest safe default is denying loopback —
+        // only the in-VM app can appear as one. The app could still forge
+        // via the VM's own primary IP; closing that needs the real source
+        // list (PoC-02).
+        !ip.is_loopback()
+    } else {
+        allow.iter().any(|p| p.contains(&ip))
+    }
+}
+
 /// Serve the hook endpoint on `listener` until the process dies.
 /// `accept()` failures are logged and retried with backoff — propagating an
 /// error here would kill PID 1 (and the whole MicroVM) on e.g. EMFILE from
@@ -670,16 +683,7 @@ pub async fn serve(agent: std::sync::Arc<Agent>, listener: TcpListener) -> ! {
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
-                let allowed = if allow.is_empty() {
-                    // No allowlist: the strongest safe default is denying
-                    // loopback — only the in-VM app can appear as one. The
-                    // app could still forge via the VM's own primary IP;
-                    // closing that needs the real source list (PoC-02).
-                    !peer.ip().is_loopback()
-                } else {
-                    allow.iter().any(|p| p.contains(&peer.ip()))
-                };
-                if !allowed {
+                if !peer_allowed(&allow, peer.ip()) {
                     warn!(%peer, "hook connection from disallowed peer, dropping");
                     continue;
                 }
@@ -708,10 +712,14 @@ pub async fn serve(agent: std::sync::Arc<Agent>, listener: TcpListener) -> ! {
     }
 }
 
-async fn route(
+async fn route<B>(
     agent: std::sync::Arc<Agent>,
-    req: Request<Incoming>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    req: Request<B>,
+) -> Result<Response<Full<Bytes>>, hyper::Error>
+where
+    B: hyper::body::Body,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     let path = req.uri().path().to_string();
     if req.method() != Method::POST || !path.starts_with(HOOK_PREFIX) {
         return Ok(resp(StatusCode::NOT_FOUND, json!({"error": "not found"})));
@@ -836,6 +844,168 @@ pub async fn serve_admin(agent: std::sync::Arc<Agent>, listener: TcpListener) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::tests::fake_app;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const APP_OK: &str = "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+    const APP_FAIL: &str =
+        "HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+
+    /// A loopback port nothing listens on: OTLP posts and relays sent
+    /// there fail fast instead of reaching a real local service.
+    fn closed_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    fn agent(edit: impl FnOnce(&mut Config)) -> Arc<Agent> {
+        let mut cfg = crate::config::fixture();
+        cfg.otlp_port = closed_port();
+        cfg.app_hook_port = closed_port();
+        edit(&mut cfg);
+        Arc::new(Agent::new(cfg, Reaper::idle()))
+    }
+
+    fn post<B>(hook: &str, body: B) -> Request<B> {
+        Request::post(format!("{HOOK_PREFIX}{hook}"))
+            .body(body)
+            .unwrap()
+    }
+
+    /// A request body that never delivers a byte.
+    struct Stalled;
+
+    impl hyper::body::Body for Stalled {
+        type Data = Bytes;
+        type Error = std::convert::Infallible;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+        ) -> Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+            Poll::Pending
+        }
+    }
+
+    #[test]
+    fn peer_allowed_denies_loopback_without_an_allowlist() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert!(!peer_allowed(&[], ip("127.0.0.1")));
+        assert!(!peer_allowed(&[], ip("::1")));
+        assert!(peer_allowed(&[], ip("10.0.0.5")));
+        let listed = [PeerRule::parse("10.0.0.0/8").unwrap()];
+        assert!(peer_allowed(&listed, ip("10.1.2.3")));
+        assert!(!peer_allowed(&listed, ip("192.168.0.1")));
+        assert!(!peer_allowed(&listed, ip("127.0.0.1")));
+        let loopback = [PeerRule::parse("127.0.0.0/8").unwrap()];
+        assert!(peer_allowed(&loopback, ip("127.0.0.1")));
+    }
+
+    /// The accept loop itself: a disallowed peer is closed without a
+    /// single HTTP byte; an allowed one gets an answer.
+    #[tokio::test]
+    async fn serve_closes_disallowed_peers_before_http() {
+        for (allow, answered) in [
+            (vec![], false),
+            (vec![PeerRule::parse("127.0.0.0/8").unwrap()], true),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tokio::spawn(serve(agent(|c| c.hook_allowed_peers = allow), listener));
+            let mut conn = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            let _ = conn
+                .write_all(b"GET / HTTP/1.1\r\nhost: kagero\r\n\r\n")
+                .await;
+            let mut reply = Vec::new();
+            let _ = tokio::time::timeout(Duration::from_secs(5), conn.read_to_end(&mut reply))
+                .await
+                .expect("the hook port neither answered nor closed");
+            let reply = String::from_utf8_lossy(&reply);
+            if answered {
+                assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
+            } else {
+                assert!(reply.is_empty(), "{reply}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn route_rejects_unknown_paths_before_reading_the_body() {
+        let a = agent(|_| {});
+        let get = Request::get(format!("{HOOK_PREFIX}run"))
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        let elsewhere = Request::post("/other")
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        for req in [get, elsewhere] {
+            let status = route(a.clone(), req).await.unwrap().status();
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
+        // Reading the stalled body would end in 408 after the hook budget.
+        let status = route(a, post("bogus", Stalled)).await.unwrap().status();
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn route_caps_the_body_size_and_read_time() {
+        let a = agent(|c| {
+            c.hook_timeouts
+                .insert("ready".into(), Duration::from_millis(100));
+        });
+        let big = post("ready", Full::new(Bytes::from(vec![b'x'; MAX_BODY + 1])));
+        let status = route(a.clone(), big).await.unwrap().status();
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        let status = route(a, post("ready", Stalled)).await.unwrap().status();
+        assert_eq!(status, StatusCode::REQUEST_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn run_with_invalid_json_is_rejected_and_stays_rerunnable() {
+        let a = agent(|_| {});
+        let (code, _) = a.handle_hook("run", b"not json").await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        let (code, _) = a.handle_hook("run", br#"{"microvmId":"mvm-1"}"#).await;
+        assert_eq!(code, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn duplicate_hook_replays_the_first_success() {
+        let (port, hits) = fake_app(Some(APP_OK.into())).await;
+        let a = agent(|c| c.app_hook_port = port);
+        let first = a.handle_hook("ready", b"{}").await;
+        let second = a.handle_hook("ready", b"{}").await;
+        assert_eq!(first.0, StatusCode::OK);
+        assert_eq!(first, second);
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "a replay reached the app");
+    }
+
+    #[tokio::test]
+    async fn failed_and_repeatable_hooks_run_again() {
+        let (port, hits) = fake_app(Some(APP_FAIL.into())).await;
+        let a = agent(|c| c.app_hook_port = port);
+        for _ in 0..2 {
+            let (code, _) = a.handle_hook("validate", b"{}").await;
+            assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+        let (port, hits) = fake_app(Some(APP_OK.into())).await;
+        let a = agent(|c| c.app_hook_port = port);
+        for _ in 0..2 {
+            let (code, _) = a.handle_hook("suspend", b"{}").await;
+            assert_eq!(code, StatusCode::OK);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
 
     /// The counter must be able to carry every registry value of
     /// kagero.hook.status — a value the agent never sends would leave

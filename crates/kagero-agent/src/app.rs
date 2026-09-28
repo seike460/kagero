@@ -161,7 +161,7 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -172,7 +172,7 @@ mod tests {
     /// A loopback "app" that reads each request and answers with
     /// `response` (None = never answer). Returns its port and the number
     /// of connections it accepted.
-    async fn fake_app(response: Option<String>) -> (u16, Arc<AtomicUsize>) {
+    pub(crate) async fn fake_app(response: Option<String>) -> (u16, Arc<AtomicUsize>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let hits = Arc::new(AtomicUsize::new(0));
