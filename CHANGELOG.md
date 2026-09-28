@@ -39,6 +39,10 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Agent**: a deliberate collector restart (for example `/resume`
   without `KAGERO_COLLECTOR_RELOAD_URL`) no longer logs the old process
   as `child exited on its own`.
+- **Agent**: with `KAGERO_COLLECTOR_START=build` and `KAGERO_SECRET_ARN`
+  both set, the collector now waits for `/run` as documented. Before, the
+  build-time start failed and logged a `kagero.lifecycle.degraded` event
+  on every build.
 - **Agent**: a collector or app spawn whose exec fails can no longer
   abort PID 1. The reaper thread could reap the failed child before the
   spawn waited for it.

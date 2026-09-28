@@ -114,6 +114,10 @@ all.
 `KAGERO_COLLECTOR_START` (`build`/`run`), `KAGERO_COLLECTOR_RELOAD_URL`,
 `KAGERO_BACKEND`, `KAGERO_SECRET_ARN`.
 
+`KAGERO_COLLECTOR_START=build` starts the collector before the snapshot.
+When `KAGERO_SECRET_ARN` is also set, the first start waits for `/run`,
+because the rendered config needs the secret that `/run` fetches.
+
 ## Unverified (PoC)
 
 - Alloy vs Rotel memory/startup/reload comparison — PoC-04.

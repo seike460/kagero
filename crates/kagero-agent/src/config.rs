@@ -76,7 +76,8 @@ impl PeerRule {
 pub enum CollectorStart {
     /// Start the collector during build (before the snapshot); reconfigure at /run.
     /// With KAGERO_SECRET_ARN set the build-time start defers to /run —
-    /// the config embeds credentials that only exist after the /run fetch.
+    /// the config embeds credentials that only exist after the /run fetch
+    /// (see [`Config::collector_starts_at_build`]).
     Build,
     /// Start the collector for the first time at /run.
     Run,
@@ -470,6 +471,13 @@ impl Config {
         })
     }
 
+    /// Build mode starts the collector before the snapshot — unless a
+    /// secret is configured: the rendered config needs the secret, which
+    /// only the /run fetch provides, so the first start waits for /run.
+    pub fn collector_starts_at_build(&self) -> bool {
+        self.collector_start == CollectorStart::Build && self.secret_arn.is_none()
+    }
+
     pub fn hook_timeout(&self, hook: &str) -> Duration {
         self.hook_timeouts
             .get(hook)
@@ -747,6 +755,22 @@ mod tests {
         ] {
             assert!(!endpoint_safe(bad), "should reject {bad:?}");
         }
+    }
+
+    #[test]
+    fn build_start_waits_for_run_when_a_secret_is_configured() {
+        let starts =
+            |vars: &[(&str, &str)]| from_vars(USER, vars).unwrap().collector_starts_at_build();
+        assert!(starts(&[("KAGERO_COLLECTOR_START", "build")]));
+        assert!(!starts(&[
+            ("KAGERO_COLLECTOR_START", "build"),
+            (
+                "KAGERO_SECRET_ARN",
+                "arn:aws:secretsmanager:us-east-1:123456789012:secret:kagero"
+            ),
+        ]));
+        assert!(!starts(&[("KAGERO_COLLECTOR_START", "run")]));
+        assert!(!starts(&[]));
     }
 
     #[test]

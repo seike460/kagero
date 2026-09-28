@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
     // Optional build-time collector start (ADR-005 — PoC-03/04 decides the
     // default; both modes are implemented). configure_and_ensure_running
     // is a no-op when no collector binary is configured.
-    if agent.cfg.collector_start == CollectorStart::Build {
+    if agent.cfg.collector_starts_at_build() {
         let id = identity::Identity::default();
         let ctx = collector::RenderContext {
             identity: &id,
@@ -108,6 +108,8 @@ async fn main() -> Result<()> {
                 serde_json::Map::new(),
             );
         }
+    } else if agent.cfg.collector_start == CollectorStart::Build {
+        info!("KAGERO_SECRET_ARN is set; the collector starts at /run");
     }
 
     // Spawn the app with dropped privileges in its own process group.

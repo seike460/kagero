@@ -109,6 +109,10 @@ Prometheus 系の取り込みでラベルになるのは resource 属性だか�
 `KAGERO_COLLECTOR_START`（`build`/`run`）、`KAGERO_COLLECTOR_RELOAD_URL`、
 `KAGERO_BACKEND`、`KAGERO_SECRET_ARN`。
 
+`KAGERO_COLLECTOR_START=build` にすると、スナップショットの前に収集器を起動します。
+`KAGERO_SECRET_ARN` も設定した場合は、最初の起動を `/run` まで待ちます。
+描画する設定に、`/run` で取る秘密情報が要るためです。
+
 ## 未確認（PoC）
 
 - Alloy と Rotel のメモリ・起動時間・再読込の比較: PoC-04。
