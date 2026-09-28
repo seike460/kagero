@@ -21,7 +21,7 @@ kagero は、Grafana で AWS Lambda ファミリーを見るための可観測�
 | A. MicroVMs | Rust 製の小さなエージェント `kagero` が、コンテナの起動役として動きます。フックを決まった順で中継し、MicroVM ごとに識別情報を付け、停止と終了の前にテレメトリを送り切り、コスト推定のための使用量を記録します | v0.1（プレビュー） | `crates/kagero-agent` — 実装済み。simulator の E2E で検証。実機 PoC は未実施 |
 | B. Lambda 関数 | PromQL と OpenTelemetry を前提にしたダッシュボードとアラートを用意します。コールドスタートと INIT の費用も分析します。Managed Instances にも対応します | v0.2 | `packages/dashboards` + `packages/pricing` — MicroVM 概要のダッシュボードとアラートは実装済みで、生成した v1 JSON を CI で検査。`docs/design/functions-durable-k6.md` の関数レベルのダッシュボード・アラート MVP は**まだ未実装** |
 | D. Durable Functions | 再実行を含む 1 つの実行を、Tempo か X-Ray で 1 本の trace として見せます | v0.3（実験） | `packages/durable-stitcher` — 実装済み。API の形は AWS のドキュメントで裏付け。実イベントは未検証 |
-| C. k6 | Lambda 関数（15 分以内の分割）と MicroVMs（最長 8 時間）で k6 を大規模に動かし、結果を送り先に届けます | v0.4（実験） | `packages/k6-runner` — 枠組みは実装済み（Distributed Map による分割、EMF/OTLP/annotation の出力）。長時間実行向けの MicroVM 起動経路は**まだ未実装**。実実行は未検証 |
+| C. k6 | Lambda 関数（15 分以内の分割）と MicroVMs（最長 8 時間）で k6 を大規模に動かし、結果を送り先に届けます | v0.4（実験） | `packages/k6-runner` — 枠組みは実装済み（Distributed Map による分割、EMF/OTLP/annotation の出力）。長時間実行向けの MicroVM 起動経路は**まだ未実装**。実実行は未検証。k6 本体（AGPL-3.0）は同梱しません。`KageroK6Run` の worker に、`bin/k6` とテストのスクリプトを置く layer を足します |
 
 支える部品は `packages/sim`（実際のエージェントを駆動するフック simulator）、`packages/secrets`（Secrets Manager の解決）、`packages/cdk`（`KageroMicrovmImage`・`KageroDurableStitcher`・`KageroK6Run`）、`collector/`（LGTM と CloudWatch 向けの Alloy・OTel テンプレート）、`semconv/` + `packages/semconv`（属性の正本と、Rust・TypeScript の定数を出す生成器）、`examples/`（Node.js と Python の MicroVM イメージ）です。
 

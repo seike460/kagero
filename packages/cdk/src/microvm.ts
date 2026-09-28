@@ -54,8 +54,8 @@ export interface KageroMicrovmConfig {
    * custom `collectorConfigTemplate` (the agent warns at startup).
    */
   backend: "lgtm" | "cloudwatch" | "both";
-  /** Billing baseline — env + optionally echoed into resources so
-   *  dashboards and billing read the same number. */
+  /** Billing baseline — emitted as KAGERO_MICROVM_BASELINE_GIB/_VCPU
+   *  only; `resources` is passed through as given, not derived. */
   baselineGib: number;
   baselineVcpu: number;
   otlpEndpointLgtm?: string;
@@ -68,7 +68,12 @@ export interface KageroMicrovmConfig {
   otlpEndpointCwTraces?: string;
   otlpEndpointCwMetrics?: string;
   otlpEndpointCwLogs?: string;
-  /** Single-backend OTLP endpoint override (KAGERO_OTLP_ENDPOINT). */
+  /**
+   * LGTM endpoint fallback (KAGERO_OTLP_ENDPOINT), used when
+   * otlpEndpointLgtm is unset. The agent never applies it to
+   * CloudWatch — use otlpEndpointCloudwatch there (unlike the durable
+   * stitcher, where the same variable is also the CloudWatch fallback).
+   */
   otlpEndpoint?: string;
   /** Hooks.Port + KAGERO_HOOK_PORT (default 2018, range 1–65535; must
    *  not collide with the agent's other ports 2019/2020/4318 or 4317). */
@@ -396,8 +401,8 @@ export class KageroMicrovmImage extends Construct {
     if (cfg.sampleIntervalMs !== undefined) {
       checkRange("sampleIntervalMs", cfg.sampleIntervalMs, 1, 3_600_000);
     }
-    // u32 on the agent side — an out-of-range uid/gid parses to None
-    // and silently changes privilege-drop semantics (config.rs).
+    // u32 on the agent side — anything else fails to parse and the
+    // agent bails at boot, taking PID 1 down (config.rs).
     if (cfg.appUid !== undefined) checkRange("appUid", cfg.appUid, 0, 4_294_967_295);
     if (cfg.appGid !== undefined) checkRange("appGid", cfg.appGid, 0, 4_294_967_295);
     if (cfg.hookReserveFraction !== undefined) {

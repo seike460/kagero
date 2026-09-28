@@ -6,7 +6,7 @@
  * ```json
  * {
  *   "shardInput": {
- *     "runId": "r-1", "shardCount": 4, "scriptPath": "/k6/test.js",
+ *     "runId": "r-1", "shardCount": 4, "scriptPath": "/opt/k6/test.js",
  *     "startAtMs": 1750000000000, "backend": "lgtm",
  *     "extraTags": { "suite": "checkout" }
  *   },
@@ -21,6 +21,18 @@
  * its own `shardIndex` (and optionally extraArgs/extraTags/k6Bin). The
  * map merges them with States.JsonMerge and hands the worker a literal
  * ShardEvent — no field-name translation to drift.
+ *
+ * The construct ships neither k6 nor the script. The worker spawns
+ * `k6` from PATH (or the ShardEvent's absolute `k6Bin`), so add a layer
+ * with `bin/k6` built for the worker's architecture —
+ * `run.worker.addLayers(...)` puts it at /opt/bin/k6, which Lambda keeps
+ * on PATH — and ship the script the same way (a layer's `k6/test.js`
+ * is /opt/k6/test.js). Without k6, every shard waits until `startAtMs`
+ * and then fails.
+ *
+ * k6 is AGPL-3.0: kagero only invokes it. A layer that redistributes
+ * the binary keeps it unmodified and states the license and where to
+ * get the source (functions-durable-k6.md §3-4).
  */
 
 import { createRequire } from "node:module";
@@ -38,7 +50,7 @@ import { grantSecretRead } from "./secrets.js";
 const require_ = createRequire(import.meta.url);
 
 export interface KageroK6RunProps {
-  /** Entry file — defaults to the built k6-runner package. */
+  /** Entry file — defaults to the k6-runner package source (src/index.ts). */
   entry?: string;
   /**
    * Non-secret env for the worker (backend endpoints, EMF namespace,

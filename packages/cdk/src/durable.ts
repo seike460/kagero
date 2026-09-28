@@ -4,6 +4,12 @@
  * shape: source "aws.lambda", detail-type "Durable Execution Status
  * Change". A DLQ catches notifications that fail even after the
  * EventBridge retries.
+ *
+ * Scope: the rule matches durable executions of every function in the
+ * account and region, so the role may read the history of all of them
+ * (lambda:GetDurableExecutionHistory on `function:*`). The history is
+ * fetched with IncludeExecutionData=false — step names, status and
+ * timing, never payloads. There is no per-function filter today.
  */
 
 import { createRequire } from "node:module";
