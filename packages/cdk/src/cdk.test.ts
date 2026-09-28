@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { KageroDurableStitcher } from "./durable.js";
 import { KageroK6Run } from "./k6.js";
 import { KageroMicrovmImage, kageroEnvironment } from "./microvm.js";
@@ -14,13 +14,32 @@ const FIXTURE_ENTRY = path.join(
   "../test/fixture/handler.ts",
 );
 
+const outdirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of outdirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function makeStack(): { app: App; stack: Stack } {
   const outdir = fs.mkdtempSync(path.join(os.tmpdir(), "kagero-cdk-"));
+  outdirs.push(outdir);
   const app = new App({ outdir });
   const stack = new Stack(app, "TestStack", {
     env: { region: "us-east-1", account: "123456789012" },
   });
   return { app, stack };
+}
+
+type PolicyStatement = { Action: string | string[]; Resource: unknown };
+
+function policyStatements(t: Template): PolicyStatement[] {
+  return Object.values(t.findResources("AWS::IAM::Policy")).flatMap(
+    (p) => p.Properties.PolicyDocument.Statement as PolicyStatement[],
+  );
+}
+
+function findStatement(t: Template, action: string): PolicyStatement | undefined {
+  return policyStatements(t).find((s) => ([] as string[]).concat(s.Action).includes(action));
 }
 
 const baseKagero = () => ({ backend: "lgtm" as const, baselineGib: 2, baselineVcpu: 2 });
@@ -319,16 +338,11 @@ describe("KageroDurableStitcher", () => {
     }[];
     expect(ruleTargets[0]?.DeadLetterConfig).toBeDefined();
 
-    const policies = t.findResources("AWS::IAM::Policy");
-    const stmts = Object.values(policies).flatMap(
-      (p) => p.Properties.PolicyDocument.Statement as { Action: string[]; Resource: unknown }[],
-    );
-    const history = stmts.find((s) => s.Action.includes("lambda:GetDurableExecutionHistory"));
+    const history = findStatement(t, "lambda:GetDurableExecutionHistory");
     expect(history).toBeDefined();
     expect(JSON.stringify(history?.Resource)).toContain("function:*");
     // secretsmanager read granted for the header secret.
-    const secretRead = stmts.find((s) => s.Action.includes("secretsmanager:GetSecretValue"));
-    expect(secretRead).toBeDefined();
+    expect(findStatement(t, "secretsmanager:GetSecretValue")).toBeDefined();
   });
 
   it("backend 'both' emits the two per-backend endpoint env vars", () => {
@@ -459,12 +473,10 @@ describe("KageroK6Run", () => {
     expect(def).toContain('\\"Payload.$\\":\\"$.payload\\"');
     expect(def).toContain("lambda:invoke");
 
-    // secretsmanager read granted for the grafana token.
-    const policies = t.findResources("AWS::IAM::Policy");
-    const stmts = Object.values(policies).flatMap(
-      (p) => p.Properties.PolicyDocument.Statement as { Action: string[] }[],
-    );
-    expect(stmts.some((s) => s.Action.includes("secretsmanager:GetSecretValue"))).toBe(true);
+    // secretsmanager read granted for the grafana token; a partial ARN
+    // (no random suffix) still gets the wildcard suffix.
+    const secretRead = findStatement(t, "secretsmanager:GetSecretValue");
+    expect(JSON.stringify(secretRead?.Resource)).toContain("secret:g-AbC-??????");
   });
 
   it("rejects plaintext secret env and bad tolerance", () => {
