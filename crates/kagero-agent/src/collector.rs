@@ -105,7 +105,8 @@ pub fn render_template(template: &str, cfg: &Config, ctx: &RenderContext) -> Str
             },
             // AWS OTLP endpoints are per-signal, each with its own SigV4
             // service (monitoring/logs/xray). Resolution order: per-signal
-            // override → legacy single-endpoint env → region-derived AWS
+            // override → shared CloudWatch endpoint
+            // (KAGERO_OTLP_ENDPOINT_CLOUDWATCH) → region-derived AWS
             // default. An empty result leaves the mark → fail closed.
             "KAGERO_ENDPOINT_CW_METRICS" => {
                 cw_signal_endpoint(cfg, &cfg.otlp_endpoint_cw_metrics, "monitoring")?
@@ -188,9 +189,10 @@ pub fn render_template(template: &str, cfg: &Config, ctx: &RenderContext) -> Str
     out
 }
 
-/// Per-signal CloudWatch OTLP endpoint: explicit override, else the legacy
-/// single-endpoint env, else the AWS default for this signal's service
-/// name and region (logs./monitoring./xray.<region>.amazonaws.com).
+/// Per-signal CloudWatch OTLP endpoint: explicit override, else the shared
+/// CloudWatch endpoint (KAGERO_OTLP_ENDPOINT_CLOUDWATCH), else the AWS
+/// default for this signal's service name and region
+/// (logs./monitoring./xray.<region>.amazonaws.com).
 fn cw_signal_endpoint(cfg: &Config, ov: &Option<String>, service: &str) -> Option<String> {
     if let Some(e) = ov.as_ref().filter(|e| !e.is_empty()) {
         return Some(e.clone());
