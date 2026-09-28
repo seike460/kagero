@@ -64,12 +64,20 @@ export interface KageroK6RunProps {
    * and any *_SECRET_ARN are rejected — use the *SecretArn props below,
    * which also attach the secretsmanager grant (ADR-011). Note the
    * backend comes from each ShardEvent, not env — KAGERO_BACKEND here
-   * is dead config.
+   * is dead config. The keys and their values are listed on
+   * `outputFromEnv` in packages/k6-runner: KAGERO_OTLP_ENDPOINT there
+   * is host:port with no scheme (k6's own format), not the URL that the
+   * agent and KageroDurableStitcher take under the same name.
    */
   environment?: Record<string, string>;
-  /** Secrets Manager ARNs resolved by the worker at init. */
+  /** Secrets Manager ARNs resolved by the worker at init. This one
+   *  holds a Grafana service-account token with annotations:create. */
   grafanaTokenSecretArn?: string;
+  /** Password for the http exporter's basic auth; KAGERO_OTLP_USERNAME
+   *  goes in `environment`. */
   otlpPasswordSecretArn?: string;
+  /** Exporter headers as "k1=v1,k2=v2" (K6_OTEL_HEADERS) — not the
+   *  "Name: value" of KageroDurableStitcher's otlpHeaderSecretArn. */
   otlpHeadersSecretArn?: string;
   /** Grafana base URL for region annotations (not secret). */
   grafanaUrl?: string;

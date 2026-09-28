@@ -99,6 +99,12 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   returns its result only after this POST, so a Grafana that stopped
   answering held the shard for up to 300 seconds (the fetch default) and
   could push it past the Lambda timeout.
+- **Docs**: the k6 runner (`outputFromEnv`) and `KageroK6Run` now list
+  the worker env and its values. There, `KAGERO_OTLP_ENDPOINT` is
+  `host:port` with no scheme and `KAGERO_OTLP_HEADERS` is
+  `k1=v1,k2=v2`, both in k6's own format. The agent and the durable
+  stitcher take a URL under the same endpoint name, and the stitcher's
+  header env is `KAGERO_OTLP_HEADER` as `Name: value`.
 - **Docs**: the README now says that the durable stitcher sends its
   `kagero.durable.*` metrics with delta temporality, and that an LGTM
   backend has to convert them to cumulative. A Prometheus without the
