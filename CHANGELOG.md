@@ -68,6 +68,9 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   `secret.secretArn`) is now granted as a complete ARN. Before, the grant
   added a `-??????` suffix that never matched, so `GetSecretValue` was
   denied at runtime (`KageroDurableStitcher`, `KageroK6Run`).
+- **Simulator**: `kagero-sim run` from the built package (`dist/cli.js`)
+  now starts the test app. Before, it looked for `test-app.ts` next to the
+  compiled files and failed before the first hook.
 
 ## [0.1.0] — 2026-09-28
 

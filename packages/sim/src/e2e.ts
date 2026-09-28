@@ -10,7 +10,7 @@
  *   - the app is dead after /terminate and the agent still answers
  */
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startSim } from "./scenario.js";
 import {
@@ -27,6 +27,8 @@ const here = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const repo = resolve(here, "../../..");
 /** Resolved agent binary path — shared by the CLI, tests, and importers. */
 export const agentBin = process.env.KAGERO_AGENT_BIN ?? join(repo, "target", "debug", "kagero");
+/** The test app beside this module: test-app.ts under src/, test-app.js under dist/. */
+export const testAppPath = join(here, `test-app${extname(fileURLToPath(import.meta.url))}`);
 
 interface Check {
   name: string;
@@ -42,7 +44,7 @@ export async function runE2E(): Promise<{ checks: Check[]; ok: boolean }> {
   }
   const sim = await startSim({
     agentBin,
-    testAppPath: join(here, "test-app.ts"),
+    testAppPath,
     suspendCycles: 2,
     suspendPauseMs: 400,
   });

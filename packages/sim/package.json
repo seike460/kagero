@@ -14,7 +14,8 @@
     "kagero-sim": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "fixtures"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
