@@ -29,6 +29,8 @@ Supporting pieces: `packages/sim` (hook simulator driving the real agent), `pack
 
 kagero supports both backends from day one. `KAGERO_BACKEND=both` exports to both from the durable-stitcher Lambda; for in-MicroVM collectors `both` requires a custom collector template — the shipped templates are single-backend (see `collector/README.md`).
 
+The durable stitcher sends its metrics (`kagero.durable.*`) with delta temporality, because it keeps no state between executions. An LGTM backend has to convert them to cumulative: Prometheus does so only with the experimental `otlp-deltatocumulative` feature flag, and Mimir rejects delta metrics by default. For such a backend, put a collector with the `deltatocumulative` processor in front of it. PoC-05 and PoC-08 check the real backends.
+
 | | LGTM | Amazon CloudWatch |
 |---|---|---|
 | Ingest | OTLP to Grafana Cloud, or to self-hosted Loki, Tempo, and Mimir | OTLP over HTTPS with SigV4 |

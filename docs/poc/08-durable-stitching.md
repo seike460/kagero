@@ -23,9 +23,9 @@ Durable Functions の実行履歴から、1 本の trace を組み立てられ�
 6. 古い時刻（例: 数日前）の span を、Tempo と X-Ray が受け付けるかを確かめます。
 7. `RUNNING` 通知と完了通知の間隔を記録し、完了通知時点で履歴 API が終端を返すかを確かめます（整合性レースの幅を測ります）。
 8. X-Ray 側で、OTLP の trace ID 形式（16 バイト hex）がそのまま受け付けられるかを確かめます。
-9. `kagero.durable.*` メトリクスの cumulative temporality が、Prometheus 系で `sum_over_time`/`count_over_time` で正しく集計できるかを確かめます（単一 writer 前提、`increase()` は使わない）。
+9. `kagero.durable.*` メトリクスは delta temporality で送ります。LGTM 側で cumulative に変えたとき（Prometheus の `otlp-deltatocumulative` フラグ、または前段の collector の `deltatocumulative` processor）、系列が取り込まれ、正しく集計できるかを確かめます。実行の間隔が変換側の保持時間（processor の `max_stale`、既定 5 分）を超えたときの値も記録します。Grafana Cloud と CloudWatch が delta を変換なしで受け付けるかも記録します。
 10. リトライで失敗した handler の invocation が `InvocationCompleted` を出すかを確かめ、`replays = invocations − 1` の推定を検証します。
-11. EventBridge は at-least-once 配送です。終端通知が重複したとき、trace は決定的 trace ID で重複除去されますが、メトリクスの data point は再送されるため `count_over_time` 系で二重に数えます。現状 dedupe store は持たないため、重複の実測頻度とメトリクスへの影響を記録します（大きければイベント `id` の dedupe を将来課題とします）。
+11. EventBridge は at-least-once 配送です。終端通知が重複したとき、trace は決定的 trace ID で重複除去されますが、メトリクスの data point は再送されるため二重に数えます。現状 dedupe store は持たないため、重複の実測頻度とメトリクスへの影響を記録します（大きければイベント `id` の dedupe を将来課題とします）。
 
 ## 合格条件
 

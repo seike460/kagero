@@ -78,6 +78,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   `otlpHeaderSecretArn` in CDK) now goes to the LGTM target only. Before,
   it was also sent to the CloudWatch endpoints, where it broke the SigV4
   signature, so every CloudWatch export failed.
+- **Docs**: the README now says that the durable stitcher sends its
+  `kagero.durable.*` metrics with delta temporality, and that an LGTM
+  backend has to convert them to cumulative. A Prometheus without the
+  `otlp-deltatocumulative` feature flag or a default Mimir does not
+  ingest them.
 
 ## [0.1.0] — 2026-09-28
 

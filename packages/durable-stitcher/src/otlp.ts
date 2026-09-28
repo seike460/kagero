@@ -165,15 +165,18 @@ const DURABLE_BOUNDS = [1, 5, 10, 30, 60, 300, 600, 1800, 3600];
  * totals — a cumulative series reporting `asInt: 1` per record would be
  * flat forever (increase() = 0) and a cumulative `replays` would report
  * only the CURRENT execution's count, under-counting everywhere.
- * Delta lets the backend accumulate correctly (Prometheus OTLP ingest
- * converts delta→cumulative and applies `_total`).
+ * The backend must accept delta: Prometheus converts delta→cumulative on
+ * OTLP ingest only with the experimental `otlp-deltatocumulative` feature
+ * flag, and Mimir rejects delta by default. Otherwise a collector with the
+ * `deltatocumulative` processor has to sit in front (README "Backends";
+ * PoC-05/08 verify the real backends).
  *
  * The delta WINDOW is the execution's own [startTime, endTime] — not
  * [startTime, now]. OTel requires non-overlapping delta windows per
  * series; running to "now" would overlap the windows of concurrent
  * same-status executions. An execution window can still overlap a
  * *different* execution's window (durable runs do overlap); that edge is
- * bounded by Prometheus' delta→cumulative tolerance and is PoC-05 data.
+ * bounded by the delta→cumulative converter's tolerance and is PoC-05 data.
  */
 export function metricsPayload(
   rec: ExecutionRecord,

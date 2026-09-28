@@ -29,6 +29,8 @@ kagero は、Grafana で AWS Lambda ファミリーを見るための可観測�
 
 最初から、両方のバックエンドに対応します。`KAGERO_BACKEND=both` で durable-stitcher の Lambda は両方へ出力します。MicroVM 内の collector では、`both` には独自のテンプレートが必要です。同梱のテンプレートは単一バックエンドです（`collector/README.md` を参照）。
 
+durable-stitcher は、メトリクス（`kagero.durable.*`）を delta temporality（前回からの増分）で送ります。実行をまたいで状態を持たないためです。LGTM 側では、これを cumulative（累積値）に変える必要があります。Prometheus が変換するのは、実験的な機能フラグ `otlp-deltatocumulative` を有効にしたときだけです。Mimir は、既定では delta のメトリクスを拒否します。このような送り先では、`deltatocumulative` processor を入れた collector を前段に置きます。実際の送り先での挙動は、PoC-05 と PoC-08 で確かめます。
+
 | | LGTM | Amazon CloudWatch |
 |---|---|---|
 | 取り込み | Grafana Cloud か、自前の Loki・Tempo・Mimir へ OTLP で送ります | SigV4 つきの OTLP（HTTPS）で送ります |

@@ -28,6 +28,7 @@
 6. `AWS/Lambda` の標準メトリクスを、リソースタグを付けて PromQL で問い合わせます。名前とラベルを記録します。
 7. 同じパネルの定義を、両方のデータソースで表示できるかを確かめます。
 8. ダッシュボードを 1 回更新したときに課金されるサンプル数を記録し、GetMetricData の場合と比べます。
+9. delta temporality のメトリクスを、それぞれの送り先が変換なしで受け付けるかを記録します。受け付けない送り先では、変換の方法（Prometheus の `otlp-deltatocumulative` フラグ、collector の `deltatocumulative` processor）を試します。durable-stitcher のメトリクスは delta です。
 
 ## 合格条件
 
