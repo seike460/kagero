@@ -83,6 +83,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   execution environment keeps the file, and k6 does not touch it when it
   fails before opening its output (a script error, for example). The old
   points went out under the new run and shard ids.
+- **k6 runner**: the Grafana annotation POST now gives up after 5
+  seconds (`timeoutMs` on `GrafanaAnnotations` changes it). Shard 0
+  returns its result only after this POST, so a Grafana that stopped
+  answering held the shard for up to 300 seconds (the fetch default) and
+  could push it past the Lambda timeout.
 - **Docs**: the README now says that the durable stitcher sends its
   `kagero.durable.*` metrics with delta temporality, and that an LGTM
   backend has to convert them to cumulative. A Prometheus without the

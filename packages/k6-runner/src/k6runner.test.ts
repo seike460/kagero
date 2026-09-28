@@ -1,12 +1,30 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type RequestListener } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { postRunAnnotation } from "./annotations.js";
 import { baseMetricName, EmfEncoder, k6JsonToEmf } from "./emf.js";
 import { outputFromEnv } from "./index.js";
 import { k6Args, k6OtelEnv, type RunShardInput, runShard } from "./runner.js";
 import { waitForStart } from "./schedule.js";
 import { planShards, shardSpec } from "./shard.js";
+
+/** Local HTTP server for the real-fetch paths; close() also drops
+ *  connections the handler left open. */
+async function listen(handler: RequestListener) {
+  const server = createServer(handler);
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: () => {
+      server.closeAllConnections();
+      return new Promise<void>((r) => server.close(() => r()));
+    },
+  };
+}
 
 /** Index-or-throw — keeps tests free of non-null assertions. */
 function at<T>(arr: readonly T[], i: number): T {
@@ -440,5 +458,38 @@ describe("outputFromEnv", () => {
       KAGERO_OTLP_ENDPOINT: "h:4318",
     } as NodeJS.ProcessEnv);
     expect(o).toMatchObject({ kind: "otlp", exporterType: "http", endpoint: "h:4318" });
+  });
+});
+
+describe("postRunAnnotation", () => {
+  const RUN = { startMs: 1000, endMs: 2000, runId: "r", shardCount: 2 };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("gives up on a Grafana that accepts the POST and never answers", async () => {
+    const grafana = await listen(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await postRunAnnotation({ endpoint: grafana.url, token: "t", timeoutMs: 100 }, RUN);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("grafana annotation POST failed"));
+    } finally {
+      await grafana.close();
+    }
+  });
+
+  it("bounds the POST with a timeout signal by default", async () => {
+    let signal: AbortSignal | undefined;
+    await postRunAnnotation(
+      { endpoint: "https://g.example.com", token: "t" },
+      RUN,
+      async (_u, i) => {
+        signal = i.signal;
+        return { ok: true, status: 200 };
+      },
+    );
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
   });
 });

@@ -14,6 +14,9 @@ export interface GrafanaAnnotations {
   endpoint: string;
   /** Grafana service-account token with annotations:create. */
   token: string;
+  /** POST timeout (default 5000 ms) — shard 0 returns its result only
+   *  after the POST settles, so a hung Grafana must not hold it. */
+  timeoutMs?: number;
 }
 
 export type FetchLike = (
@@ -22,6 +25,7 @@ export type FetchLike = (
     method: string;
     headers: Record<string, string>;
     body: string;
+    signal?: AbortSignal;
   },
 ) => Promise<{ ok: boolean; status: number }>;
 
@@ -54,6 +58,7 @@ export async function postRunAnnotation(
         tags: ["kagero", "k6", `run:${a.runId}`],
         text: a.text ?? `kagero k6 run ${a.runId} (${a.shardCount} shard(s))`,
       }),
+      signal: AbortSignal.timeout(g.timeoutMs ?? 5000),
     });
     if (!res.ok) {
       // An annotation failure must not fail the load test itself.
