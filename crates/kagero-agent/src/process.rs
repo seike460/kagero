@@ -317,14 +317,17 @@ mod tests {
     /// Regression for the musl-container EPERM: the privilege drop must run
     /// setgroups → setgid → setuid inside pre_exec while still privileged —
     /// std's uid()/gid() run BEFORE user pre_exec closures, which left
-    /// setgroups unprivileged and killed the spawn. Requires root; skips
-    /// silently under an unprivileged dev/CI run.
+    /// setgroups unprivileged and killed the spawn. Requires root, so a
+    /// plain `cargo test` lists it as ignored; CI runs it under sudo.
     #[test]
+    #[ignore = "needs root; ci.yml runs it with sudo"]
     fn spawn_drops_privileges_as_root() {
-        if unsafe { libc::geteuid() } != 0 {
-            eprintln!("not root — skipping privilege-drop test");
-            return;
-        }
+        assert_eq!(
+            unsafe { libc::geteuid() },
+            0,
+            "run as root: sudo <test binary> --ignored --exact \
+             process::tests::spawn_drops_privileges_as_root"
+        );
         let out = std::env::temp_dir().join(format!("kagero-uid-{}", std::process::id()));
         let args = vec![
             "-c".to_string(),
