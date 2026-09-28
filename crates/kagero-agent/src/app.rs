@@ -240,4 +240,31 @@ pub(crate) mod tests {
         let out = relay(app, Duration::from_secs(5)).await;
         assert!(matches!(out, RelayOutcome::Unimplemented));
     }
+
+    #[tokio::test]
+    async fn relay_reports_a_closed_port_as_no_listener() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let out = relay(port, Duration::from_secs(5)).await;
+        assert!(matches!(out, RelayOutcome::NoListener));
+    }
+
+    #[tokio::test]
+    async fn relay_caps_the_error_body_at_8_kib() {
+        let body = "x".repeat(20 * 1024);
+        let (app, _) = fake_app(Some(format!(
+            "HTTP/1.1 500 Internal Server Error\r\ncontent-length: {}\r\n\
+             connection: close\r\n\r\n{body}",
+            body.len()
+        )))
+        .await;
+        let out = relay(app, Duration::from_secs(5)).await;
+        let RelayOutcome::Failed(500, text) = out else {
+            panic!("expected Failed(500, _)");
+        };
+        assert_eq!(text.len(), 8 * 1024);
+    }
 }
