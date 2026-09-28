@@ -169,8 +169,12 @@ fn env_string(key: &str) -> Result<Option<String>> {
     }
 }
 
-fn env_duration_ms(key: &str) -> Result<Option<Duration>> {
-    env_string(key)?
+/// Where `Config` reads its variables: `env_string` in production, a map
+/// in tests (edition 2024 makes `env::set_var` unsafe).
+type Lookup<'a> = &'a dyn Fn(&str) -> Result<Option<String>>;
+
+fn env_duration_ms(get: Lookup, key: &str) -> Result<Option<Duration>> {
+    get(key)?
         .map(|v| {
             v.parse::<u64>()
                 .map(Duration::from_millis)
@@ -179,8 +183,8 @@ fn env_duration_ms(key: &str) -> Result<Option<Duration>> {
         .transpose()
 }
 
-fn env_u32(key: &str) -> Result<Option<u32>> {
-    env_string(key)?
+fn env_u32(get: Lookup, key: &str) -> Result<Option<u32>> {
+    get(key)?
         .map(|v| {
             v.parse()
                 .with_context(|| format!("{key} must be a uid/gid number"))
@@ -188,8 +192,8 @@ fn env_u32(key: &str) -> Result<Option<u32>> {
         .transpose()
 }
 
-fn env_f64(key: &str, what: &str) -> Result<Option<f64>> {
-    env_string(key)?
+fn env_f64(get: Lookup, key: &str, what: &str) -> Result<Option<f64>> {
+    get(key)?
         .map(|v| {
             v.parse()
                 .with_context(|| format!("{key} must be a number ({what})"))
@@ -211,8 +215,8 @@ fn validated_timeout(key: &str, v: Option<Duration>) -> Result<Option<Duration>>
 /// Values interpolated into YAML/river/env templates: image metadata is
 /// trusted, but keep it inside the same safe charset as runtime ids so a
 /// stray quote or shell metachar can never break a rendered config.
-fn env_safe(key: &str, default: &str) -> Result<String> {
-    let v = env_string(key)?.unwrap_or_else(|| default.to_string());
+fn env_safe(get: Lookup, key: &str, default: &str) -> Result<String> {
+    let v = get(key)?.unwrap_or_else(|| default.to_string());
     if !v
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/' | '+' | '='))
@@ -231,20 +235,18 @@ fn endpoint_safe(v: &str) -> bool {
         .all(|c| c.is_ascii() && !c.is_ascii_control() && c != '"' && c != '\\')
 }
 
-fn env_endpoint(key: &str) -> Result<Option<String>> {
-    match env::var(key) {
-        Ok(v) if v.is_empty() => Ok(None),
-        Ok(v) if endpoint_safe(&v) => Ok(Some(v)),
-        Ok(v) => anyhow::bail!("{key} contains characters unsafe for config templates: {v:?}"),
-        Err(env::VarError::NotPresent) => Ok(None),
-        Err(env::VarError::NotUnicode(v)) => {
-            anyhow::bail!("{key} is not valid Unicode: {v:?}")
+fn env_endpoint(get: Lookup, key: &str) -> Result<Option<String>> {
+    match get(key)? {
+        Some(v) if v.is_empty() => Ok(None),
+        Some(v) if !endpoint_safe(&v) => {
+            anyhow::bail!("{key} contains characters unsafe for config templates: {v:?}")
         }
+        v => Ok(v),
     }
 }
 
-fn env_u16(key: &str, default: u16) -> Result<u16> {
-    env_string(key)?
+fn env_u16(get: Lookup, key: &str, default: u16) -> Result<u16> {
+    get(key)?
         .map(|v| {
             v.parse::<u16>()
                 .with_context(|| format!("{key} must be a port number"))
@@ -255,17 +257,17 @@ fn env_u16(key: &str, default: u16) -> Result<u16> {
 
 impl Config {
     pub fn from_env(app_command: Vec<String>) -> Result<Self> {
-        let backend = match env::var("KAGERO_BACKEND") {
-            Err(env::VarError::NotPresent) => Backend::Lgtm,
-            Err(env::VarError::NotUnicode(_)) => {
-                anyhow::bail!("KAGERO_BACKEND is not valid UTF-8")
+        Self::from_lookup(app_command, unsafe { libc::geteuid() }, &env_string)
+    }
+
+    fn from_lookup(app_command: Vec<String>, euid: u32, get: Lookup) -> Result<Self> {
+        let backend = match get("KAGERO_BACKEND")?.as_deref() {
+            None | Some("lgtm") => Backend::Lgtm,
+            Some("cloudwatch") => Backend::Cloudwatch,
+            Some("both") => Backend::Both,
+            Some(v) => {
+                anyhow::bail!("unknown KAGERO_BACKEND {v:?} — expected lgtm|cloudwatch|both")
             }
-            Ok(v) => match v.as_str() {
-                "lgtm" => Backend::Lgtm,
-                "cloudwatch" => Backend::Cloudwatch,
-                "both" => Backend::Both,
-                _ => anyhow::bail!("unknown KAGERO_BACKEND {v:?} — expected lgtm|cloudwatch|both"),
-            },
         };
         if matches!(backend, Backend::Both) {
             warn!(
@@ -274,22 +276,22 @@ impl Config {
                  actual backends (collector/README.md)"
             );
         }
-        let baseline_gib: f64 = env_f64("KAGERO_MICROVM_BASELINE_GIB", "GiB")?.unwrap_or(2.0);
+        let baseline_gib: f64 = env_f64(get, "KAGERO_MICROVM_BASELINE_GIB", "GiB")?.unwrap_or(2.0);
         // Pricing: 2 GiB per vCPU (research §1-2).
         let baseline_vcpu =
-            env_f64("KAGERO_MICROVM_BASELINE_VCPU", "vCPUs")?.unwrap_or(baseline_gib / 2.0);
+            env_f64(get, "KAGERO_MICROVM_BASELINE_VCPU", "vCPUs")?.unwrap_or(baseline_gib / 2.0);
 
         let mut hook_timeouts = HashMap::new();
         for hook in ["ready", "validate", "run", "suspend", "resume", "terminate"] {
             let key = format!("KAGERO_HOOK_TIMEOUT_MS_{}", hook.to_uppercase());
-            if let Some(d) = env_duration_ms(&key)? {
+            if let Some(d) = env_duration_ms(get, &key)? {
                 hook_timeouts.insert(hook.to_string(), d);
             }
         }
 
-        let running_as_root = unsafe { libc::geteuid() } == 0;
-        let app_uid = env_u32("KAGERO_APP_UID")?;
-        let app_gid = env_u32("KAGERO_APP_GID")?;
+        let running_as_root = euid == 0;
+        let app_uid = env_u32(get, "KAGERO_APP_UID")?;
+        let app_gid = env_u32(get, "KAGERO_APP_GID")?;
         // ADR: the app runs with privileges dropped by the agent. Default to
         // "nobody" (65534) when the agent itself is root and nothing was set.
         let (app_uid, app_gid) = if running_as_root && app_uid.is_none() {
@@ -301,10 +303,10 @@ impl Config {
         };
 
         Ok(Config {
-            hook_port: env_u16("KAGERO_HOOK_PORT", 2018)?,
-            app_hook_port: env_u16("KAGERO_APP_HOOK_PORT", 2019)?,
+            hook_port: env_u16(get, "KAGERO_HOOK_PORT", 2018)?,
+            app_hook_port: env_u16(get, "KAGERO_APP_HOOK_PORT", 2019)?,
             otlp_port: {
-                let p = env_u16("KAGERO_OTLP_PORT", 4318)?;
+                let p = env_u16(get, "KAGERO_OTLP_PORT", 4318)?;
                 // Collector templates also bind gRPC on a fixed 4317 —
                 // an HTTP port equal to it would collide at startup.
                 if p == 4317 {
@@ -312,9 +314,9 @@ impl Config {
                 }
                 p
             },
-            admin_port: env_u16("KAGERO_ADMIN_PORT", 2020)?,
+            admin_port: env_u16(get, "KAGERO_ADMIN_PORT", 2020)?,
             hook_allowed_peers: {
-                let raw = env_string("KAGERO_HOOK_ALLOWED_PEERS")?.unwrap_or_default();
+                let raw = get("KAGERO_HOOK_ALLOWED_PEERS")?.unwrap_or_default();
                 let mut rules = Vec::new();
                 for s in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
                     // Bail at startup rather than silently block all hooks
@@ -325,25 +327,26 @@ impl Config {
             },
 
             backend,
-            otlp_endpoint_lgtm: env_endpoint("KAGERO_OTLP_ENDPOINT_LGTM")?
-                .or(env_endpoint("KAGERO_OTLP_ENDPOINT")?),
+            otlp_endpoint_lgtm: env_endpoint(get, "KAGERO_OTLP_ENDPOINT_LGTM")?
+                .or(env_endpoint(get, "KAGERO_OTLP_ENDPOINT")?),
             // AWS OTLP endpoints are per-signal: logs.<region>, monitoring.
             // <region>, xray.<region> — and each signs with a different
             // SigV4 service (AWS OTLP endpoints doc). Per-signal envs are
             // overrides for VPC/custom endpoints; unset = region-derived.
-            otlp_endpoint_cloudwatch: env_endpoint("KAGERO_OTLP_ENDPOINT_CLOUDWATCH")?,
-            otlp_endpoint_cw_metrics: env_endpoint("KAGERO_ENDPOINT_CW_METRICS")?,
-            otlp_endpoint_cw_logs: env_endpoint("KAGERO_ENDPOINT_CW_LOGS")?,
-            otlp_endpoint_cw_traces: env_endpoint("KAGERO_ENDPOINT_CW_TRACES")?,
+            otlp_endpoint_cloudwatch: env_endpoint(get, "KAGERO_OTLP_ENDPOINT_CLOUDWATCH")?,
+            otlp_endpoint_cw_metrics: env_endpoint(get, "KAGERO_ENDPOINT_CW_METRICS")?,
+            otlp_endpoint_cw_logs: env_endpoint(get, "KAGERO_ENDPOINT_CW_LOGS")?,
+            otlp_endpoint_cw_traces: env_endpoint(get, "KAGERO_ENDPOINT_CW_TRACES")?,
 
             baseline_gib,
             baseline_vcpu,
-            image_name: env_safe("KAGERO_MICROVM_IMAGE_NAME", "")?,
-            image_version: env_safe("KAGERO_MICROVM_IMAGE_VERSION", "")?,
-            microvm_size: env_safe("KAGERO_MICROVM_SIZE", &format!("{}gb", baseline_gib))?,
+            image_name: env_safe(get, "KAGERO_MICROVM_IMAGE_NAME", "")?,
+            image_version: env_safe(get, "KAGERO_MICROVM_IMAGE_VERSION", "")?,
+            microvm_size: env_safe(get, "KAGERO_MICROVM_SIZE", &format!("{}gb", baseline_gib))?,
             region: env_safe(
+                get,
                 "KAGERO_AWS_REGION",
-                &env_string("AWS_REGION")?.unwrap_or_else(|| "us-east-1".into()),
+                &get("AWS_REGION")?.unwrap_or_else(|| "us-east-1".into()),
             )?,
 
             hook_timeout_default: {
@@ -352,7 +355,7 @@ impl Config {
                 // misconfiguration.
                 let d = validated_timeout(
                     "KAGERO_HOOK_TIMEOUT_MS",
-                    env_duration_ms("KAGERO_HOOK_TIMEOUT_MS")?,
+                    env_duration_ms(get, "KAGERO_HOOK_TIMEOUT_MS")?,
                 )?;
                 if let Some(d) = d
                     && d > Duration::from_secs(300)
@@ -370,7 +373,8 @@ impl Config {
                 hook_timeouts
             },
             reserve_fraction: {
-                let f: f64 = env_f64("KAGERO_HOOK_RESERVE_FRACTION", "fraction")?.unwrap_or(0.1);
+                let f: f64 =
+                    env_f64(get, "KAGERO_HOOK_RESERVE_FRACTION", "fraction")?.unwrap_or(0.1);
                 // >1 or NaN would panic Duration::mul_f64 under panic=abort.
                 if !f.is_finite() || !(0.0..1.0).contains(&f) {
                     anyhow::bail!("KAGERO_HOOK_RESERVE_FRACTION must be in [0,1): got {f}");
@@ -382,11 +386,11 @@ impl Config {
             app_uid,
             app_gid,
 
-            tenant_pointer: env_string("KAGERO_TENANT_JSON_POINTER")?,
-            session_pointer: env_string("KAGERO_SESSION_JSON_POINTER")?,
+            tenant_pointer: get("KAGERO_TENANT_JSON_POINTER")?,
+            session_pointer: get("KAGERO_SESSION_JSON_POINTER")?,
 
-            collector_bin: env_string("KAGERO_COLLECTOR_BIN")?,
-            collector_args: match env_string("KAGERO_COLLECTOR_ARGS")? {
+            collector_bin: get("KAGERO_COLLECTOR_BIN")?,
+            collector_args: match get("KAGERO_COLLECTOR_ARGS")? {
                 Some(v) => serde_json::from_str::<Vec<String>>(&v)
                     .with_context(|| "KAGERO_COLLECTOR_ARGS must be a JSON array of strings")?,
                 None => vec![
@@ -395,35 +399,35 @@ impl Config {
                     "{config}".into(),
                 ],
             },
-            collector_config_template: env_string("KAGERO_COLLECTOR_CONFIG_TEMPLATE")?
+            collector_config_template: get("KAGERO_COLLECTOR_CONFIG_TEMPLATE")?
                 .unwrap_or_else(|| "/etc/kagero/collector.tmpl".into()),
-            collector_config_out: env_string("KAGERO_COLLECTOR_CONFIG_OUT")?
+            collector_config_out: get("KAGERO_COLLECTOR_CONFIG_OUT")?
                 .unwrap_or_else(|| "/run/kagero/collector.yaml".into()),
-            collector_start: match env_string("KAGERO_COLLECTOR_START")?.as_deref() {
+            collector_start: match get("KAGERO_COLLECTOR_START")?.as_deref() {
                 Some("build") => CollectorStart::Build,
                 Some("run") | None => CollectorStart::Run,
                 Some(v) => {
                     anyhow::bail!("unknown KAGERO_COLLECTOR_START {v:?} — expected build|run")
                 }
             },
-            collector_reload_url: env_string("KAGERO_COLLECTOR_RELOAD_URL")?,
+            collector_reload_url: get("KAGERO_COLLECTOR_RELOAD_URL")?,
 
-            secret_arn: env_string("KAGERO_SECRET_ARN")?,
-            imds_endpoint: env_string("KAGERO_IMDS_ENDPOINT")?
+            secret_arn: get("KAGERO_SECRET_ARN")?,
+            imds_endpoint: get("KAGERO_IMDS_ENDPOINT")?
                 .unwrap_or_else(|| "http://169.254.169.254".into()),
-            secrets_endpoint: env_string("KAGERO_SECRETS_ENDPOINT")?,
+            secrets_endpoint: get("KAGERO_SECRETS_ENDPOINT")?,
 
             sample_interval: {
                 // Zero would panic tokio::time::interval under panic=abort.
                 match validated_timeout(
                     "KAGERO_SAMPLE_INTERVAL_MS",
-                    env_duration_ms("KAGERO_SAMPLE_INTERVAL_MS")?,
+                    env_duration_ms(get, "KAGERO_SAMPLE_INTERVAL_MS")?,
                 )? {
                     Some(d) => d,
                     None => Duration::from_secs(1),
                 }
             },
-            cgroup_path: env_string("KAGERO_CGROUP_PATH")?,
+            cgroup_path: get("KAGERO_CGROUP_PATH")?,
         })
     }
 
@@ -488,6 +492,122 @@ pub(crate) fn fixture() -> Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ROOT: u32 = 0;
+    const USER: u32 = 1000;
+
+    fn from_vars(euid: u32, vars: &[(&str, &str)]) -> Result<Config> {
+        let vars: HashMap<String, String> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Config::from_lookup(vec!["/bin/app".into()], euid, &|k| Ok(vars.get(k).cloned()))
+    }
+
+    #[test]
+    fn unset_vars_take_the_documented_defaults() {
+        let cfg = from_vars(USER, &[]).unwrap();
+        assert_eq!(
+            (
+                cfg.hook_port,
+                cfg.app_hook_port,
+                cfg.otlp_port,
+                cfg.admin_port
+            ),
+            (2018, 2019, 4318, 2020)
+        );
+        assert_eq!(cfg.backend, Backend::Lgtm);
+        assert_eq!((cfg.baseline_gib, cfg.baseline_vcpu), (2.0, 1.0));
+        assert_eq!(cfg.microvm_size, "2gb");
+        assert_eq!(cfg.region, "us-east-1");
+        assert_eq!(cfg.hook_timeout_default, Duration::from_secs(10));
+        assert_eq!(cfg.reserve_fraction, 0.1);
+        assert_eq!(cfg.collector_start, CollectorStart::Run);
+        assert!(cfg.hook_allowed_peers.is_empty());
+    }
+
+    #[test]
+    fn root_agent_runs_the_app_as_nobody_unless_told_otherwise() {
+        let ids = |euid, vars: &[(&str, &str)]| {
+            let cfg = from_vars(euid, vars).unwrap();
+            (cfg.app_uid, cfg.app_gid)
+        };
+        assert_eq!(ids(ROOT, &[]), (Some(65534), Some(65534)));
+        assert_eq!(
+            ids(ROOT, &[("KAGERO_APP_GID", "50")]),
+            (Some(65534), Some(50))
+        );
+        // uid only: gid follows the uid, never root's group.
+        assert_eq!(
+            ids(ROOT, &[("KAGERO_APP_UID", "1000")]),
+            (Some(1000), Some(1000))
+        );
+        assert_eq!(
+            ids(
+                ROOT,
+                &[("KAGERO_APP_UID", "1000"), ("KAGERO_APP_GID", "50")]
+            ),
+            (Some(1000), Some(50))
+        );
+        // A non-root agent cannot drop privileges — nothing is forced.
+        assert_eq!(ids(USER, &[]), (None, None));
+        assert_eq!(
+            ids(USER, &[("KAGERO_APP_UID", "1000")]),
+            (Some(1000), Some(1000))
+        );
+    }
+
+    #[test]
+    fn empty_endpoint_counts_as_unset() {
+        let cfg = from_vars(
+            USER,
+            &[
+                ("KAGERO_OTLP_ENDPOINT_LGTM", ""),
+                ("KAGERO_OTLP_ENDPOINT", "http://lgtm:4318"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(cfg.otlp_endpoint_lgtm.as_deref(), Some("http://lgtm:4318"));
+    }
+
+    #[test]
+    fn malformed_values_fail_startup() {
+        for (key, value) in [
+            ("KAGERO_BACKEND", "aws"),
+            ("KAGERO_HOOK_PORT", "70000"),
+            ("KAGERO_OTLP_PORT", "4317"),
+            ("KAGERO_APP_UID", "-1"),
+            ("KAGERO_HOOK_TIMEOUT_MS", "0"),
+            ("KAGERO_HOOK_TIMEOUT_MS", "300001"),
+            ("KAGERO_HOOK_TIMEOUT_MS_RUN", "0"),
+            ("KAGERO_HOOK_TIMEOUT_MS_READY", "300001"),
+            ("KAGERO_HOOK_RESERVE_FRACTION", "1"),
+            ("KAGERO_HOOK_RESERVE_FRACTION", "-0.1"),
+            ("KAGERO_HOOK_RESERVE_FRACTION", "NaN"),
+            ("KAGERO_HOOK_ALLOWED_PEERS", "10.0.0.0/8,10.0.0.0/33"),
+            ("KAGERO_MICROVM_IMAGE_NAME", "a\"b"),
+            ("KAGERO_OTLP_ENDPOINT_LGTM", "http://a\"b"),
+            ("KAGERO_COLLECTOR_ARGS", "--config"),
+            ("KAGERO_COLLECTOR_START", "later"),
+            ("KAGERO_SAMPLE_INTERVAL_MS", "0"),
+        ] {
+            assert!(
+                from_vars(USER, &[(key, value)]).is_err(),
+                "{key}={value:?} must fail startup"
+            );
+        }
+    }
+
+    #[test]
+    fn lookup_errors_fail_startup() {
+        let cfg = Config::from_lookup(vec![], USER, &|k| {
+            if k == "KAGERO_BACKEND" {
+                anyhow::bail!("{k} is not valid Unicode")
+            }
+            Ok(None)
+        });
+        assert!(cfg.is_err());
+    }
 
     #[test]
     fn per_hook_timeout_overrides_default() {
