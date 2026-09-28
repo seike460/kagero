@@ -98,8 +98,9 @@ impl Usage {
         self.running.store(false, Ordering::Relaxed);
     }
 
-    /// Returns the wall-clock seconds spent suspended (clock-skew tolerant:
-    /// negative deltas are clamped to zero and reported by the caller).
+    /// Returns the wall-clock seconds spent suspended. A wall clock that
+    /// stepped backwards clamps the delta to zero without a report; the
+    /// caller reports only implausibly long intervals (over a day).
     pub async fn mark_resume(&self) -> f64 {
         let mut g = self.inner.lock().await;
         g.snapshot.resumes += 1;

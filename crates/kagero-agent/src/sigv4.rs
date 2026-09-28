@@ -127,8 +127,8 @@ pub fn sign(
 mod tests {
     use super::*;
 
-    // AWS SigV4 test suite: get-vanilla-query-order-key-case adapted.
-    // Well-known example from AWS docs (iam:GetUser), fixed timestamp.
+    // The signed-request example from the AWS SigV4 documentation:
+    // IAM ListUsers, us-east-1, 20150830T123600Z, AKIDEXAMPLE.
     #[test]
     fn known_signature() {
         let creds = Credentials {
