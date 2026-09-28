@@ -54,6 +54,11 @@ export interface SimHandle {
 /** Allocate the ephemeral ports + mock collector, spawn the agent and
  * wait for its admin endpoint. Caller drives hooks via `run()`. */
 export async function startSim(opts: SimOptions): Promise<SimHandle> {
+  if (!existsSync(opts.agentBin)) {
+    throw new Error(
+      `agent binary not found at ${opts.agentBin} — run \`cargo build -p kagero-agent\` first`,
+    );
+  }
   const otlp = await startMockOtlp(0);
   const dir = mkdtempSync(join(tmpdir(), "kagero-sim-"));
   // The app may be dropped to uid 65534 (root-mode agent) — it still has

@@ -11,7 +11,6 @@
  *     attributes on metric datapoints or resources (ADR-008)
  *   - the app is dead after /terminate and the agent still answers
  */
-import { existsSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -43,11 +42,6 @@ interface Check {
 }
 
 export async function runE2E(): Promise<{ checks: Check[]; ok: boolean }> {
-  if (!existsSync(agentBin)) {
-    throw new Error(
-      `agent binary not found at ${agentBin} — run \`cargo build -p kagero-agent\` first`,
-    );
-  }
   const sim = await startSim({
     agentBin,
     testAppPath,

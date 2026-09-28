@@ -2,7 +2,13 @@
  * Assertion helpers over the evidence the simulator collects: OTLP
  * captures and the app's hook-arrival log.
  */
-import { ATTR_KAGERO_LIFECYCLE_EVENT, METRIC_LABEL_FORBIDDEN } from "@kagero/semconv";
+import {
+  ATTR_KAGERO_HOOK_NAME,
+  ATTR_KAGERO_HOOK_STATUS,
+  ATTR_KAGERO_LIFECYCLE_EVENT,
+  METRIC_KAGERO_MICROVM_HOOK_RESULTS,
+  METRIC_LABEL_FORBIDDEN,
+} from "@kagero/semconv";
 import type { HookResult } from "./hooks.js";
 import type { OtlpCapture } from "./mock-otlp.js";
 
@@ -163,6 +169,21 @@ export function isLifecycle(c: OtlpCapture | undefined, event: string): boolean 
     }
   }
   return false;
+}
+
+/** `kagero.hook.status` of every hook-result datapoint for `hook`, in
+ * capture order — how the agent classified the app's answer. */
+export function hookStatuses(captures: OtlpCapture[], hook: string): string[] {
+  const out: string[] = [];
+  for (const m of capturedMetrics(captures)) {
+    if (m.name !== METRIC_KAGERO_MICROVM_HOOK_RESULTS) continue;
+    for (const p of dataPointsOf(m)) {
+      if (stringAttr(p.attributes, ATTR_KAGERO_HOOK_NAME) !== hook) continue;
+      const status = stringAttr(p.attributes, ATTR_KAGERO_HOOK_STATUS);
+      if (status !== undefined) out.push(status);
+    }
+  }
+  return out;
 }
 
 /**
