@@ -59,6 +59,10 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   `cloudwatch:PutMetricData`. Before, AWS denied every export to the
   CloudWatch OTLP endpoints. Traces to X-Ray also need Transaction Search
   enabled in the account.
+- **CDK**: a Secrets Manager ARN passed as a token (for example
+  `secret.secretArn`) is now granted as a complete ARN. Before, the grant
+  added a `-??????` suffix that never matched, so `GetSecretValue` was
+  denied at runtime (`KageroDurableStitcher`, `KageroK6Run`).
 
 ## [0.1.0] — 2026-09-28
 

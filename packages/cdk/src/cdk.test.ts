@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { App, Stack } from "aws-cdk-lib";
+import { App, type CfnElement, Stack, aws_secretsmanager as secretsmanager } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { afterEach, describe, expect, it } from "vitest";
 import { KageroDurableStitcher } from "./durable.js";
@@ -346,6 +346,23 @@ describe("KageroDurableStitcher", () => {
     // The lgtm backend never signs AWS requests — no OTLP write grants.
     expect(findStatement(t, "xray:PutTraceSegments")).toBeUndefined();
     expect(findStatement(t, "cloudwatch:PutMetricData")).toBeUndefined();
+  });
+
+  it("grants read on a secret passed as a token without the partial-ARN suffix", () => {
+    const { stack } = makeStack();
+    const secret = new secretsmanager.Secret(stack, "Header");
+    new KageroDurableStitcher(stack, "Stitch", {
+      entry: FIXTURE_ENTRY,
+      otlpEndpoint: "https://example.com/otlp",
+      backend: "lgtm",
+      otlpHeaderSecretArn: secret.secretArn,
+    });
+    const secretRead = findStatement(Template.fromStack(stack), "secretsmanager:GetSecretValue");
+    // Ref already yields the complete ARN — a "-??????" suffix would
+    // never match it and GetSecretValue would be denied at runtime.
+    expect(secretRead?.Resource).toEqual({
+      Ref: stack.getLogicalId(secret.node.defaultChild as CfnElement),
+    });
   });
 
   for (const backend of ["cloudwatch", "both"] as const) {
