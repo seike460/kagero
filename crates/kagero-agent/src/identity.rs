@@ -96,10 +96,13 @@ pub fn identity_from_run_body(
         other => other.clone(),
     };
 
+    // An id with no allowed character left is absent, not "" — an empty
+    // tenant id would still be stamped on telemetry and pool every such
+    // tenant into one blank bucket.
     let lookup = |p: Option<&str>| -> Option<String> {
         let p = p?;
         let doc = payload_doc.as_ref()?;
-        json_pointer(doc, p).map(|s| sanitize_id(&s))
+        Some(sanitize_id(&json_pointer(doc, p)?)).filter(|s| !s.is_empty())
     };
 
     Identity {
@@ -242,6 +245,23 @@ mod tests {
         assert!(!clean.contains(';'));
         assert!(!clean.contains('{'));
         assert_eq!(sanitize_id("ok-tenant_1.2"), "ok-tenant_1.2");
+    }
+
+    #[test]
+    fn ids_left_empty_by_sanitizing_are_absent() {
+        let body = json!({
+            "microvmId": "mvm-1",
+            "runHookPayload": {"tenant": {"id": "テナント"}, "session": ""},
+        });
+        let id = identity_from_run_body(&body, Some("/tenant/id"), Some("/session"));
+        assert_eq!(id.tenant_id, None);
+        assert_eq!(id.session_id, None);
+        let attrs = identity_attributes(&id, "img", "1", "2gb", "us-east-1");
+        assert!(
+            !attrs
+                .iter()
+                .any(|(k, _)| k == sem::ATTR_KAGERO_TENANT_ID || k == sem::ATTR_KAGERO_SESSION_ID)
+        );
     }
 
     #[test]

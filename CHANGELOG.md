@@ -51,6 +51,9 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Agent**: `kagero.usage.running_seconds` no longer counts suspended
   time. The first sample after `/resume` now counts from the resume, not
   from the last sample before the suspend.
+- **Agent**: a tenant or session id with no allowed character left
+  (ASCII letters, digits and `._-@:/+=`) is omitted instead of being
+  sent as an empty `kagero.tenant.id` / `kagero.session.id`.
 
 ## [0.1.0] — 2026-09-28
 

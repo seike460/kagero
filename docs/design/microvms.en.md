@@ -203,6 +203,7 @@ Options not adopted:
 
 - `service.instance.id` is set to the `microvmId` received at `/run`.
 - Tenant and session IDs are attached only when the app explicitly opts in. They are extracted when `runHookPayload` is JSON and the extraction location (a JSON Pointer, e.g. `/tenant/id`) is configured.
+- IDs keep only ASCII alphanumerics and `._-@:/+=`. IDs are embedded in config files and shell-sourced files, so every other character is removed. An ID with nothing left is not attached.
 - Identity attributes are overwritten on the collector side, so values spoofed by the app do not survive.
 - IDs are attached to logs and traces only — never to metrics.
 
