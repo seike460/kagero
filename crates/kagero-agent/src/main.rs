@@ -37,6 +37,20 @@ fn parse_app_command() -> Vec<String> {
     }
 }
 
+/// HTTP client for peers inside the MicroVM or on its link-local network:
+/// the app hook relay, the loopback OTLP receiver, the collector reload
+/// endpoint and the credential endpoints. HTTP(S)_PROXY / ALL_PROXY must
+/// never capture these requests (AWS asks for NO_PROXY=169.254.169.254
+/// for the same reason), and a redirect must not carry a hook body or a
+/// credential request to another host.
+fn local_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("reqwest client")
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // JSON to stdout: failures must reach CloudWatch Logs even when the

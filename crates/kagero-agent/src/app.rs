@@ -39,7 +39,7 @@ impl App {
             pid: Arc::new(Mutex::new(None)),
             expected_exit: Arc::new(AtomicBool::new(false)),
             ever_started: AtomicBool::new(false),
-            client: reqwest::Client::new(),
+            client: crate::local_http_client(),
             reaper,
         }
     }
@@ -153,5 +153,80 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    const HOOK: &str = "/aws/lambda-microvms/runtime/v1/run";
+
+    /// A loopback "app" that reads each request and answers with
+    /// `response` (None = never answer). Returns its port and the number
+    /// of connections it accepted.
+    async fn fake_app(response: Option<String>) -> (u16, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                let response = response.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 1024];
+                    while !buf.ends_with(b"\r\n\r\n{}") {
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                        }
+                    }
+                    match response {
+                        Some(r) => {
+                            let _ = stream.write_all(r.as_bytes()).await;
+                        }
+                        None => tokio::time::sleep(Duration::from_secs(30)).await,
+                    }
+                });
+            }
+        });
+        (port, hits)
+    }
+
+    async fn relay(port: u16, budget: Duration) -> RelayOutcome {
+        App::new(crate::process::Reaper::idle())
+            .relay(port, HOOK, b"{}", budget, Instant::now() + budget)
+            .await
+    }
+
+    #[tokio::test]
+    async fn relay_never_follows_a_redirect() {
+        let (elsewhere, elsewhere_hits) = fake_app(Some(
+            "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".into(),
+        ))
+        .await;
+        let (app, _) = fake_app(Some(format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nlocation: http://127.0.0.1:{elsewhere}{HOOK}\r\n\
+             content-length: 0\r\nconnection: close\r\n\r\n"
+        )))
+        .await;
+        let out = relay(app, Duration::from_secs(5)).await;
+        assert!(matches!(out, RelayOutcome::Failed(307, _)));
+        assert_eq!(elsewhere_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn relay_reports_404_as_unimplemented() {
+        let (app, _) = fake_app(Some(
+            "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".into(),
+        ))
+        .await;
+        let out = relay(app, Duration::from_secs(5)).await;
+        assert!(matches!(out, RelayOutcome::Unimplemented));
     }
 }

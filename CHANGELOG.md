@@ -5,6 +5,16 @@ All notable changes to kagero are documented here. The format follows
 project uses [Semantic Versioning](https://semver.org/) — no
 compatibility guarantees while the version is 0.x (docs/roadmap.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **Agent**: the hook relay, the loopback OTLP export, the collector
+  reload call and the credential lookups (IMDS / container credentials)
+  no longer go through `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`, and
+  the hook relay no longer follows redirects returned by the app. Only
+  the Secrets Manager call still honors the proxy settings.
+
 ## [0.1.0] — 2026-09-28
 
 MicroVMs preview release. Implementation preceded the PoC gate — see

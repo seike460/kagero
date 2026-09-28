@@ -398,7 +398,7 @@ impl Collector {
     pub async fn reload(&self, cfg: &Config, budget: std::time::Duration) -> Result<()> {
         let started = std::time::Instant::now();
         if let Some(url) = &cfg.collector_reload_url {
-            let resp = reqwest::Client::new()
+            let resp = crate::local_http_client()
                 .post(url)
                 .timeout(budget)
                 .send()

@@ -88,7 +88,7 @@ impl OtlpSender {
     pub fn new(otlp_base_url: String, timeout: Duration) -> Self {
         Self {
             base: otlp_base_url.trim_end_matches('/').to_string(),
-            client: reqwest::Client::new(),
+            client: crate::local_http_client(),
             timeout,
             failures: AtomicU64::new(0),
             start_nanos: unix_nanos(),

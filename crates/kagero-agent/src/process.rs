@@ -230,6 +230,17 @@ impl Reaper {
         r
     }
 
+    /// A reaper without the waitpid thread, for tests: a live reaper
+    /// would reap every child of the test binary, including children
+    /// that other tests wait on themselves.
+    #[cfg(test)]
+    pub fn idle() -> &'static Reaper {
+        Box::leak(Box::new(Reaper {
+            statuses: Mutex::new(HashMap::new()),
+            watched: Mutex::new(HashSet::new()),
+        }))
+    }
+
     /// Spawn a child AND register it as watched under one lock hold —
     /// the reaper thread blocks on `watched` while checking a reaped
     /// pid, so holding the lock across spawn+insert closes the window

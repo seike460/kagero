@@ -142,9 +142,8 @@ pub async fn fetch_secret(
     secret_arn: &str,
     deadline: Instant,
 ) -> Result<String> {
-    let client = reqwest::Client::new();
     let imds_endpoint = imds_endpoint.trim_end_matches('/');
-    let creds = resolve_credentials(&client, imds_endpoint, deadline).await?;
+    let creds = resolve_credentials(&crate::local_http_client(), imds_endpoint, deadline).await?;
 
     let endpoint = secrets_endpoint
         .map(|e| e.trim_end_matches('/').to_string())
@@ -195,7 +194,12 @@ pub async fn fetch_secret(
         },
     )?;
 
-    let mut req = client.post(&endpoint).body(body).timeout(budget(deadline)?);
+    // Secrets Manager is the one off-VM call — it keeps the system proxy
+    // settings, for VPCs whose only egress is a proxy.
+    let mut req = reqwest::Client::new()
+        .post(&endpoint)
+        .body(body)
+        .timeout(budget(deadline)?);
     for (k, v) in &headers {
         if k != "host" {
             req = req.header(k.as_str(), v.as_str());
