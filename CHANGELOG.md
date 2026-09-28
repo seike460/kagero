@@ -48,6 +48,9 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Agent**: a collector or app spawn whose exec fails can no longer
   abort PID 1. The reaper thread could reap the failed child before the
   spawn waited for it.
+- **Agent**: `kagero.usage.running_seconds` no longer counts suspended
+  time. The first sample after `/resume` now counts from the resume, not
+  from the last sample before the suspend.
 
 ## [0.1.0] — 2026-09-28
 

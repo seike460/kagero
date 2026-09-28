@@ -51,6 +51,9 @@ struct Inner {
     snapshot: UsageSnapshot,
     last_cpu_usec: Option<u64>,
     suspend_started_nanos: Option<u64>,
+    /// When the last /resume moved the VM back to RUNNING — the sampler
+    /// counts from here, not from its pre-suspend sample.
+    resumed_at: Option<std::time::Instant>,
 }
 
 impl Usage {
@@ -70,6 +73,7 @@ impl Usage {
                 },
                 last_cpu_usec: None,
                 suspend_started_nanos: None,
+                resumed_at: None,
             }),
             running: AtomicBool::new(false),
             cgroup: cgroup_path
@@ -100,7 +104,9 @@ impl Usage {
     pub async fn mark_resume(&self) -> f64 {
         let mut g = self.inner.lock().await;
         g.snapshot.resumes += 1;
-        self.running.store(true, Ordering::Relaxed);
+        if !self.running.swap(true, Ordering::Relaxed) {
+            g.resumed_at = Some(std::time::Instant::now());
+        }
         // No open interval (retry / forged /resume): count the resume but
         // do NOT record a bogus 0s histogram observation.
         let Some(t0) = g.suspend_started_nanos.take() else {
@@ -214,10 +220,21 @@ impl Usage {
                     last = std::time::Instant::now();
                     continue;
                 }
-                let now = std::time::Instant::now();
-                let dt = now.saturating_duration_since(last).as_secs_f64();
-                last = now;
                 let mut g = u.inner.lock().await;
+                let now = std::time::Instant::now();
+                // A /resume since the previous sample: nothing before it
+                // was RUNNING, and a snapshot restore may carry the
+                // monotonic clock through the whole suspension. Count from
+                // the resume and take a fresh CPU baseline.
+                let from = match g.resumed_at.take() {
+                    Some(r) if r > last => {
+                        g.last_cpu_usec = None;
+                        r
+                    }
+                    _ => last,
+                };
+                let dt = now.saturating_duration_since(from).as_secs_f64();
+                last = now;
                 g.snapshot.running_seconds += dt;
 
                 if let Some(cpu_usec) = u.read_cpu_usec() {
@@ -348,6 +365,33 @@ mod tests {
                 assert_eq!(*c, 0, "bucket {i} must be empty");
             }
         }
+    }
+
+    /// A frozen VM runs no sampler tick, yet a restore may carry the
+    /// monotonic clock through the suspension — the first sample after
+    /// /resume must not charge that gap as RUNNING time.
+    #[tokio::test]
+    async fn suspended_time_never_counts_as_running() {
+        let u = Usage::new(Some("/nonexistent"), 1.0, 2.0);
+        u.set_running(true);
+        let otlp = Arc::new(crate::telemetry::OtlpSender::new(
+            "http://127.0.0.1:9".into(),
+            Duration::from_millis(10),
+        ));
+        u.spawn_sampler(Duration::from_millis(20), otlp, Duration::from_secs(3600));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        u.mark_suspend().await;
+        let before = u.snapshot().await.running_seconds;
+        // Block the current-thread runtime: no tick runs, as in a frozen
+        // VM, while the monotonic clock keeps moving.
+        std::thread::sleep(Duration::from_secs(1));
+        u.mark_resume().await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let gained = u.snapshot().await.running_seconds - before;
+        assert!(
+            gained < 0.5,
+            "suspended time counted as running: +{gained}s"
+        );
     }
 
     #[tokio::test]
