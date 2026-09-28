@@ -380,6 +380,25 @@ describe("KageroDurableStitcher", () => {
     });
   }
 
+  it("enforces TLS on the default DLQ", () => {
+    const { stack } = makeStack();
+    new KageroDurableStitcher(stack, "Stitch", {
+      entry: FIXTURE_ENTRY,
+      otlpEndpoint: "https://example.com/otlp",
+      backend: "lgtm",
+    });
+    Template.fromStack(stack).hasResourceProperties("AWS::SQS::QueuePolicy", {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Effect: "Deny",
+            Condition: { Bool: { "aws:SecureTransport": "false" } },
+          }),
+        ]),
+      },
+    });
+  });
+
   it("backend 'both' emits the two per-backend endpoint env vars", () => {
     const { stack } = makeStack();
     new KageroDurableStitcher(stack, "Stitch", {

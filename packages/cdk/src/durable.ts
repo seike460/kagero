@@ -103,7 +103,8 @@ export class KageroDurableStitcher extends Construct {
     }
 
     this.deadLetterQueue =
-      props.deadLetterQueue ?? new sqs.Queue(this, "Dlq", { retentionPeriod: Duration.days(14) });
+      props.deadLetterQueue ??
+      new sqs.Queue(this, "Dlq", { retentionPeriod: Duration.days(14), enforceSSL: true });
 
     this.fn = new nodejs.NodejsFunction(this, "Fn", {
       entry:
