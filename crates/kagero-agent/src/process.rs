@@ -201,29 +201,30 @@ impl Reaper {
         thread::spawn(move || {
             loop {
                 let mut status: i32 = 0;
-                let pid = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+                // waitpid runs under `watched`, which spawn_watched holds
+                // for the whole spawn: when exec fails, std waitpid()s the
+                // child itself and asserts success — reaping it here first
+                // would fail that wait with ECHILD and abort PID 1.
+                let (pid, watched, err) = {
+                    let w = r.watched.lock().unwrap_or_else(|e| e.into_inner());
+                    let pid = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+                    let err = std::io::Error::last_os_error();
+                    (pid, pid > 0 && w.contains(&(pid as u32)), err)
+                };
                 if pid > 0 {
                     debug!(pid, status, "reaped child");
-                    // Lock order: watched before statuses (both here and
-                    // in watch/unwatch callers) to avoid deadlock.
-                    let watched = r.watched.lock().ok().map(|w| w.contains(&(pid as u32)));
                     if let Ok(mut m) = r.statuses.lock()
-                        && (watched == Some(true) || m.len() < 1024)
+                        && (watched || m.len() < 1024)
                     {
                         // Bound the map — adopted orphans would grow it
                         // forever. Watched pids always get a slot.
                         m.insert(pid as u32, status);
                     }
-                } else if pid == 0 {
+                } else if pid == 0 || err.raw_os_error() == Some(libc::ECHILD) {
                     thread::sleep(Duration::from_millis(25));
                 } else {
-                    let err = std::io::Error::last_os_error();
-                    if err.raw_os_error() == Some(libc::ECHILD) {
-                        thread::sleep(Duration::from_millis(25));
-                    } else {
-                        warn!(?err, "waitpid failed");
-                        thread::sleep(Duration::from_millis(250));
-                    }
+                    warn!(?err, "waitpid failed");
+                    thread::sleep(Duration::from_millis(250));
                 }
             }
         });
@@ -242,10 +243,10 @@ impl Reaper {
     }
 
     /// Spawn a child AND register it as watched under one lock hold —
-    /// the reaper thread blocks on `watched` while checking a reaped
-    /// pid, so holding the lock across spawn+insert closes the window
-    /// where a fast-exiting child's status would be dropped before its
-    /// watch was registered.
+    /// the reaper thread takes `watched` before each waitpid, so holding
+    /// the lock across spawn+insert keeps it from reaping mid-spawn and
+    /// closes the window where a fast-exiting child's status would be
+    /// dropped before its watch was registered.
     pub fn spawn_watched(&self, spec: &ChildSpec) -> Result<u32> {
         let mut w = self
             .watched
@@ -372,5 +373,43 @@ mod tests {
         for g in groups_line.split_whitespace() {
             assert_eq!(g, "65534", "supplementary groups leaked: {reported}");
         }
+    }
+
+    /// While spawn_watched holds `watched`, the reaper must leave every
+    /// child alone — std's failed-exec path waitpid()s its child and
+    /// aborts on ECHILD. Runs in a copy of this test binary: a live
+    /// reaper would steal the children other tests wait on.
+    #[test]
+    fn reaper_waits_while_a_spawn_holds_the_watch_lock() {
+        const NAME: &str = "process::tests::reaper_waits_while_a_spawn_holds_the_watch_lock";
+        const IN_CHILD: &str = "KAGERO_TEST_REAPER_CHILD";
+        if std::env::var_os(IN_CHILD).is_none() {
+            let out = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--nocapture"])
+                .env(IN_CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("1 passed"),
+                "{stdout}\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return;
+        }
+        let reaper = Reaper::start();
+        let held = reaper.watched.lock().unwrap();
+        let pid = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .unwrap()
+            .id() as i32;
+        // The child exits long before this; an unguarded reaper polls
+        // every 25ms and would have reaped it.
+        thread::sleep(Duration::from_millis(300));
+        let rc = unsafe { libc::waitpid(pid, std::ptr::null_mut(), 0) };
+        let err = std::io::Error::last_os_error();
+        drop(held);
+        assert_eq!(rc, pid, "the reaper took the child mid-spawn: {err}");
     }
 }
