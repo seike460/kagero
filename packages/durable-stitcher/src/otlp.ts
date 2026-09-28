@@ -1,8 +1,9 @@
 /**
  * OTLP/HTTP exporter for stitched traces and derived metrics.
- * LGTM: plain POST. CloudWatch: SigV4-signed POST (service "monitoring",
- * same as the collector template). The endpoint is always injected —
- * no backend URL is hardcoded here.
+ * LGTM: plain POST. CloudWatch: SigV4-signed POST, with the service per
+ * signal as in the collector template — traces "xray", metrics
+ * "monitoring" (overridable per signal). The endpoint is always
+ * injected — no backend URL is hardcoded here.
  */
 
 import {

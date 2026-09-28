@@ -13,8 +13,7 @@ export interface DurableStateNotification {
   executionArn: string;
   status: DurableStatus;
   name?: string;
-  /** ISO timestamps carried on the event (endTimestamp is terminal-only). */
-  startTimestamp?: string;
+  /** ISO timestamp carried on terminal events only. */
   endTimestamp?: string;
 }
 
@@ -59,7 +58,6 @@ export function parseEventBridge(raw: unknown): DurableStateNotification {
   const out: DurableStateNotification = { executionArn: arn, status };
   const name = d.durableExecutionName ?? d.name;
   if (typeof name === "string" && name) out.name = name;
-  if (typeof d.startTimestamp === "string") out.startTimestamp = d.startTimestamp;
   if (typeof d.endTimestamp === "string") out.endTimestamp = d.endTimestamp;
   return out;
 }
