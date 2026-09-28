@@ -71,6 +71,9 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Simulator**: `kagero-sim run` from the built package (`dist/cli.js`)
   now starts the test app. Before, it looked for `test-app.ts` next to the
   compiled files and failed before the first hook.
+- **Durable stitcher**: fetching the execution history no longer throws a
+  `TypeError` on every notification. The SDK client's `send` was called
+  without its client, so the stitcher never exported a trace or a metric.
 
 ## [0.1.0] — 2026-09-28
 

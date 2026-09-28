@@ -225,7 +225,7 @@ describe("parseEventBridge (verified event shape)", () => {
 });
 
 describe("normalizeApiResponse (real API shape)", () => {
-  it("derives execution facts from Execution* events and pages concatenated", () => {
+  it("derives execution facts from Execution* events", () => {
     const r = normalizeApiResponse(ARN, {
       Events: [
         { EventId: 1, EventType: "ExecutionStarted", EventTimestamp: 1750000000 },
