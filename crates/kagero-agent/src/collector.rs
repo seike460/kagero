@@ -958,12 +958,28 @@ mod tests {
         ] {
             let tpl = std::fs::read_to_string(root.join(rel))
                 .unwrap_or_else(|e| panic!("read {rel}: {e}"));
+            let lines: Vec<&str> = tpl.lines().map(str::trim).collect();
             for key in crate::semconv_gen::METRIC_LABEL_FORBIDDEN {
-                let occurrences = tpl.matches(key).count();
+                // Count strip statements only — the Alloy template also
+                // names the ids in its `set(...)` stamping statements.
+                // attributes/resource processors: `- key: k` + `action: delete`.
+                let key_line = format!("- key: {key}");
+                let processor_deletes = lines
+                    .windows(2)
+                    .filter(|w| w[0] == key_line && w[1] == "action: delete")
+                    .count();
+                // OTTL: `delete_key(attributes, "k")`, escaped inside Alloy strings.
+                let ottl_deletes = tpl
+                    .matches(&format!("delete_key(attributes, \"{key}\")"))
+                    .count()
+                    + tpl
+                        .matches(&format!("delete_key(attributes, \\\"{key}\\\")"))
+                        .count();
+                let strips = processor_deletes + ottl_deletes;
                 assert!(
-                    occurrences >= 3,
-                    "{rel}: forbidden key {key} must appear in resource-level, \
-                     datapoint-level, AND scope-level strip lists"
+                    strips >= 3,
+                    "{rel}: forbidden key {key} must be deleted in resource-level, \
+                     datapoint-level, AND scope-level strip lists ({strips} found)"
                 );
             }
         }
@@ -1141,10 +1157,16 @@ mod tests {
         let (res, met) = out.split_once("met: |").unwrap();
         // IDs allowed on the resource (log/trace) side…
         assert!(res.contains("mvm-1"));
-        assert!(res.contains("t"));
+        assert!(res.contains("- key: kagero.tenant.id\n      value: \"t\""));
+        assert!(res.contains("- key: kagero.session.id\n      value: \"s\""));
         // …but never on the metric side (ADR-008).
         assert!(!met.contains("mvm-1"));
-        assert!(!met.contains("kagero.tenant.id"));
+        for key in crate::semconv_gen::METRIC_LABEL_FORBIDDEN {
+            assert!(
+                !met.contains(&format!("- key: {key}\n")),
+                "forbidden key {key} leaked into metric attrs"
+            );
+        }
         assert!(met.contains("kagero.microvm.image.name"));
     }
 }
