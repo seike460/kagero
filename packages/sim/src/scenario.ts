@@ -22,7 +22,8 @@ export interface SimPorts {
 
 export interface SimOptions {
   agentBin: string;
-  /** Path to test-app.ts / test-app.js — spawned via `node --import tsx`. */
+  /** Path to test-app.ts / test-app.js — spawned directly by node (Node >=24
+   * strips erasable TypeScript types natively; no loader). */
   testAppPath: string;
   ports?: Partial<SimPorts>;
   suspendCycles?: number;
@@ -181,7 +182,9 @@ export async function startSim(opts: SimOptions): Promise<SimHandle> {
 }
 
 /** Bind :0, read the port, close — a free ephemeral port for the fixed
- * hook/app/admin sockets so concurrent sim runs don't collide. Retries
+ * hook/app/admin sockets so concurrent sim runs don't share fixed ports.
+ * The port is only free at pick time: another process can still bind it
+ * before the agent or app does (a narrow window, not retried). Retries
  * when the OS hands back a port already claimed in `taken`. */
 async function pickPort(taken?: Set<number>): Promise<number> {
   for (;;) {
