@@ -186,6 +186,8 @@ Assumption: apps inside MicroVMs may be untrusted code (e.g., AI-generated code)
 | Telemetry integrity | App forges identity attributes | Identity attributes are overwritten on the collector side. Received telemetry is treated as "self-reported" |
 | `runHookPayload` | Leaks into logs or records | The agent never logs it. Users are guided not to put secrets in it. Whether it ends up in CloudTrail is verified in PoC-01 |
 | Hook ports | Invoked from outside | Not included in the auth token's allowed ports. Unreachability from outside is verified in PoC-02. Admin and OTLP ports are loopback-only |
+| Hook and admin ports | App binds them first and answers in kagero's place | kagero binds both ports before it starts the app |
+| OTLP ports (4318/4317) | App binds them before the collector and receives, then drops, kagero's usage and lifecycle records | Remaining risk. When the collector starts at `/run` (the default), the app that is already running can take the ports. The collector then fails to start, and a `child exited on its own` warning appears on stdout. When to start the collector is decided by PoC-03 and PoC-04 under ADR-005 |
 | The agent itself | Stopped by an ALL-privileged app | ALL privileges are opt-in for eBPF users only. The agent drops the app's privileges at startup |
 | Artifacts | Tampering | Signed with cosign and shipped with an SBOM. Dependency versions pinned |
 

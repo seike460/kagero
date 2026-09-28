@@ -630,12 +630,11 @@ fn hook_status(o: &RelayOutcome) -> sem::HookStatus {
     }
 }
 
-/// Serve the hook endpoint on `addr` until the process dies.
+/// Serve the hook endpoint on `listener` until the process dies.
 /// `accept()` failures are logged and retried with backoff — propagating an
 /// error here would kill PID 1 (and the whole MicroVM) on e.g. EMFILE from
 /// a hostile peer, and the untrusted app can reach this port.
-pub async fn serve(agent: std::sync::Arc<Agent>, addr: SocketAddr) -> Result<()> {
-    let listener = TcpListener::bind(addr).await?;
+pub async fn serve(agent: std::sync::Arc<Agent>, listener: TcpListener) -> ! {
     let conn_cap = std::sync::Arc::new(Semaphore::new(MAX_CONN));
     let allow = agent.cfg.hook_allowed_peers.clone();
     if allow.is_empty() {
@@ -647,7 +646,9 @@ pub async fn serve(agent: std::sync::Arc<Agent>, addr: SocketAddr) -> Result<()>
                source addresses"
         );
     }
-    info!(%addr, "hook server listening");
+    if let Ok(addr) = listener.local_addr() {
+        info!(%addr, "hook server listening");
+    }
     // A connection can never legitimately outlive its request's hook
     // deadline (+slack for header/body transit). Keep-alive is off —
     // hooks are rare lifecycle calls, and an idle keep-alive connection
@@ -797,14 +798,14 @@ async fn serve_http1<S>(
 /// The loopback bind is NOT a trust boundary — the untrusted app can
 /// reach it — so it gets the same connection hygiene as the hook port:
 /// bounded concurrency, no keep-alive, capped lifetime.
-pub async fn serve_admin(agent: std::sync::Arc<Agent>, addr: SocketAddr) -> Result<()> {
-    let listener = TcpListener::bind(addr).await?;
+pub async fn serve_admin(agent: std::sync::Arc<Agent>, listener: TcpListener) -> ! {
     let conn_cap = std::sync::Arc::new(Semaphore::new(8));
     const CONN_LIFE: Duration = Duration::from_secs(10);
     loop {
         let (stream, peer) = match listener.accept().await {
             Ok(x) => x,
-            Err(_) => {
+            Err(e) => {
+                warn!(?e, "admin accept failed; continuing");
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 continue;
             }

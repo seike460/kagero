@@ -1,8 +1,9 @@
 //! kagero — PID 1 supervisor for AWS Lambda MicroVMs.
 //!
 //! Usage: `kagero -- <app command...>`
-//! Order of business (microvms.md §4): start the collector (build mode only),
-//! spawn the app with dropped privileges, serve the hook port.
+//! Order of business (microvms.md §4): bind the hook and admin ports,
+//! start the collector (build mode only), spawn the app with dropped
+//! privileges, serve the hook port.
 
 mod app;
 mod collector;
@@ -18,10 +19,11 @@ mod sigv4;
 mod telemetry;
 mod usage;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use tracing::info;
+use tokio::net::TcpListener;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use config::{CollectorStart, Config};
@@ -70,6 +72,20 @@ async fn main() -> Result<()> {
     let reaper = Reaper::start();
 
     let agent = Arc::new(Agent::new(cfg.clone(), reaper));
+
+    // Bind before the untrusted app starts — it could otherwise take either
+    // port first and answer in kagero's place. The hook port is the only
+    // way hooks arrive, so failing to bind it is fatal; the admin port is
+    // health only.
+    let hook_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), agent.cfg.hook_port);
+    let hook_listener = TcpListener::bind(hook_addr)
+        .await
+        .with_context(|| format!("bind hook port {hook_addr}"))?;
+    let admin_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), agent.cfg.admin_port);
+    let admin_listener = TcpListener::bind(admin_addr)
+        .await
+        .inspect_err(|e| warn!(?e, %admin_addr, "admin endpoint unavailable; continuing"))
+        .ok();
 
     // Optional build-time collector start (ADR-005 — PoC-03/04 decides the
     // default; both modes are implemented). configure_and_ensure_running
@@ -123,13 +139,10 @@ async fn main() -> Result<()> {
     }
 
     // Loopback admin endpoint (health only).
-    {
-        let admin = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), agent.cfg.admin_port);
-        let a = agent.clone();
-        tokio::spawn(hooks::serve_admin(a, admin));
+    if let Some(listener) = admin_listener {
+        tokio::spawn(hooks::serve_admin(agent.clone(), listener));
     }
 
     // The hook port: the only externally reachable endpoint.
-    let hook_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), agent.cfg.hook_port);
-    hooks::serve(agent, hook_addr).await
+    hooks::serve(agent, hook_listener).await
 }

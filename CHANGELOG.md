@@ -20,6 +20,9 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   `KAGERO_MICROVM_BASELINE_VCPU` must be positive finite numbers.
 - **CDK**: `KageroMicrovmImage` applies the same endpoint, JSON Pointer
   and `hookPort` checks at synth time.
+- **Agent**: the hook port and the admin port are bound before the app
+  starts, so the app can no longer take either one first. A failed admin
+  bind or accept is now logged instead of dropped silently.
 
 ### Fixed
 
