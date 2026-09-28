@@ -22,6 +22,10 @@
  * map merges them with States.JsonMerge and hands the worker a literal
  * ShardEvent — no field-name translation to drift.
  *
+ * Every shard waits for `startAtMs` (epoch ms) inside its invocation,
+ * so a start more than 10 minutes ahead is refused — the wait and the
+ * k6 run share the Lambda timeout.
+ *
  * The construct ships neither k6 nor the script. The worker spawns
  * `k6` from PATH (or the ShardEvent's absolute `k6Bin`), so add a layer
  * with `bin/k6` built for the worker's architecture —

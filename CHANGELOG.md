@@ -28,6 +28,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Agent**: the hook port and the admin port are bound before the app
   starts, so the app can no longer take either one first. A failed admin
   bind or accept is now logged instead of dropped silently.
+- **k6 runner**: a shard refuses a `startAtMs` that is missing or not a
+  finite number instead of starting at once with a `NaN` skew. The
+  default limit on how far ahead `startAtMs` may be is now 10 minutes
+  (was 15). The wait and the k6 run share one invocation, and a
+  15-minute wait left no time for k6 within the Lambda timeout.
 
 ### Fixed
 

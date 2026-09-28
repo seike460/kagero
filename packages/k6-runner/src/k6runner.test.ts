@@ -96,6 +96,23 @@ describe("waitForStart", () => {
     const c = fakeClock(0);
     await expect(waitForStart(1000, c, 500)).rejects.toThrow(/beyond/);
   });
+
+  it("keeps the default bound under the 15-minute Lambda timeout", async () => {
+    await expect(waitForStart(11 * 60_000, fakeClock(0))).rejects.toThrow(/beyond/);
+    await expect(waitForStart(9 * 60_000, fakeClock(0))).resolves.toMatchObject({
+      waitedMs: 9 * 60_000,
+    });
+  });
+
+  it("rejects a missing or non-numeric startAtMs without waiting", async () => {
+    const sleep = vi.fn(async () => {});
+    for (const bad of [undefined, Number.NaN, Number.POSITIVE_INFINITY, "1750000000000"]) {
+      await expect(waitForStart(bad as unknown as number, { now: () => 0, sleep })).rejects.toThrow(
+        /finite epoch-ms/,
+      );
+    }
+    expect(sleep).not.toHaveBeenCalled();
+  });
 });
 
 // Verified k6 json-output shapes (grafana.com/docs/k6 results json doc).
@@ -384,6 +401,15 @@ describe("runShard", () => {
     );
     expect(() => k6Args({ ...BASE_INPUT, extraTags: { tenant_id: "x" } })).toThrow(/forbidden/);
     expect(() => k6Args({ ...BASE_INPUT, extraTags: { method: "GET" } })).not.toThrow();
+  });
+
+  it("fails before spawning k6 when startAtMs is missing", async () => {
+    const spawn = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
+    const { startAtMs: _omit, ...noStart } = BASE_INPUT;
+    await expect(
+      runShard(noStart as RunShardInput, { clock: { now: () => 0, sleep: async () => {} }, spawn }),
+    ).rejects.toThrow(/startAtMs/);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("reports lateness as skew when already past startAtMs", async () => {
