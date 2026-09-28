@@ -80,7 +80,8 @@ export interface KageroDurableStitcherProps {
   sigv4ServiceMetrics?: string;
   /**
    * Secrets Manager ARN holding the "Name: value" write-scoped OTLP
-   * header. The ARN lands in env (ADR-011 allows references); the
+   * header for the LGTM target. The CloudWatch target never receives it
+   * (SigV4 only). The ARN lands in env (ADR-011 allows references); the
    * handler resolves it via Secrets Manager at cold start.
    */
   otlpHeaderSecretArn?: string;

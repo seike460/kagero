@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lambdaApiFetcher } from "./fetcher.js";
+import { handlerFromEnv } from "./index.js";
 
 const ARN =
   "arn:aws:lambda:us-east-1:123456789012:function:checkout:$LATEST/durable-execution/order-7/9f7d84c9-ea3d-3ffc-b3e5-5ec51c34ffc9";
@@ -30,6 +31,7 @@ interface Seen {
   method: string;
   path: string;
   query: URLSearchParams;
+  rawHeaders: string[];
 }
 
 let server: Server;
@@ -44,6 +46,7 @@ beforeEach(async () => {
       method: req.method ?? "",
       path: u.pathname,
       query: u.searchParams,
+      rawHeaders: req.rawHeaders,
     });
     req.resume();
     req.on("end", () => {
@@ -76,6 +79,15 @@ afterEach(async () => {
   await new Promise<void>((r) => server.close(() => r()));
 });
 
+/** Every value sent for `name` — IncomingMessage.headers drops duplicates. */
+function rawHeaderValues(raw: string[], name: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i + 1 < raw.length; i += 2) {
+    if (raw[i]?.toLowerCase() === name) out.push(raw[i + 1] ?? "");
+  }
+  return out;
+}
+
 describe("lambdaApiFetcher", () => {
   it("pages through NextMarker with the SDK client and concatenates the events", async () => {
     const rec = await lambdaApiFetcher({ region: "us-east-1" }).getHistory(ARN);
@@ -95,5 +107,38 @@ describe("lambdaApiFetcher", () => {
     expect(rec.events).toHaveLength(1);
     expect(rec.events[0]?.status).toBe("succeeded");
     expect(rec.events[0]?.endTime).toEqual(new Date(1750000009 * 1000));
+  });
+});
+
+describe("handlerFromEnv", () => {
+  it("sends KAGERO_OTLP_HEADER to the LGTM target only on backend=both", async () => {
+    const handler = handlerFromEnv({
+      KAGERO_BACKEND: "both",
+      KAGERO_OTLP_ENDPOINT_LGTM: `${base}/lgtm`,
+      KAGERO_OTLP_ENDPOINT_CLOUDWATCH: `${base}/cw`,
+      KAGERO_OTLP_HEADER: "Authorization: Basic dXNlcjpwYXNz",
+      AWS_REGION: "us-east-1",
+    });
+    const result = await handler({
+      "detail-type": "Durable Execution Status Change",
+      source: "aws.lambda",
+      detail: { durableExecutionArn: ARN, status: "SUCCEEDED" },
+    });
+    expect(result.skipped).toBe(false);
+
+    const posts = seen.filter((s) => s.method === "POST");
+    const lgtm = posts.filter((s) => s.path.startsWith("/lgtm/"));
+    const cw = posts.filter((s) => s.path.startsWith("/cw/"));
+    expect(lgtm.map((s) => s.path).sort()).toEqual(["/lgtm/v1/metrics", "/lgtm/v1/traces"]);
+    expect(cw.map((s) => s.path).sort()).toEqual(["/cw/v1/metrics", "/cw/v1/traces"]);
+    for (const s of lgtm) {
+      expect(rawHeaderValues(s.rawHeaders, "authorization")).toEqual(["Basic dXNlcjpwYXNz"]);
+    }
+    for (const s of cw) {
+      const auth = rawHeaderValues(s.rawHeaders, "authorization");
+      expect(auth).toHaveLength(1);
+      expect(auth[0]).toMatch(/^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\//);
+      expect(auth[0]).not.toContain("Basic");
+    }
   });
 });

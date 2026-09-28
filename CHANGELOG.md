@@ -74,6 +74,10 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Durable stitcher**: fetching the execution history no longer throws a
   `TypeError` on every notification. The SDK client's `send` was called
   without its client, so the stitcher never exported a trace or a metric.
+- **Durable stitcher**: `KAGERO_OTLP_HEADER` (the LGTM credential,
+  `otlpHeaderSecretArn` in CDK) now goes to the LGTM target only. Before,
+  it was also sent to the CloudWatch endpoints, where it broke the SigV4
+  signature, so every CloudWatch export failed.
 
 ## [0.1.0] — 2026-09-28
 

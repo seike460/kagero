@@ -116,7 +116,7 @@ export async function stitchNotification(
 export function handlerFromEnv(env: NodeJS.ProcessEnv = process.env) {
   // Region env name matches the agent's KAGERO_AWS_REGION (config.rs).
   const region = env.KAGERO_AWS_REGION ?? env.AWS_REGION;
-  const sharedHeaders = env.KAGERO_OTLP_HEADER
+  const lgtmHeaders = env.KAGERO_OTLP_HEADER
     ? // "Name: value; Name2: value2" — never secrets in env beyond a token
       // the deployer explicitly chooses to place (same trust level as the
       // collector env templates, ADR-011 aware).
@@ -132,7 +132,10 @@ export function handlerFromEnv(env: NodeJS.ProcessEnv = process.env) {
       endpoint: endpoint ?? "",
       backend,
       region,
-      headers: sharedHeaders,
+      // CloudWatch authenticates with SigV4 only — the LGTM credential
+      // must not reach AWS, and a second authorization header breaks the
+      // signature.
+      headers: backend === "lgtm" ? lgtmHeaders : undefined,
       sigv4Service: env.KAGERO_OTLP_SIGV4_SERVICE,
     };
     if (backend === "cloudwatch") {
