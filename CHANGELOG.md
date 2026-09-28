@@ -78,6 +78,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   `otlpHeaderSecretArn` in CDK) now goes to the LGTM target only. Before,
   it was also sent to the CloudWatch endpoints, where it broke the SigV4
   signature, so every CloudWatch export failed.
+- **k6 runner**: with the `cloudwatch` backend (EMF), a shard no longer
+  sends the k6 JSON output that an earlier shard left in `/tmp`. A warm
+  execution environment keeps the file, and k6 does not touch it when it
+  fails before opening its output (a script error, for example). The old
+  points went out under the new run and shard ids.
 - **Docs**: the README now says that the durable stitcher sends its
   `kagero.durable.*` metrics with delta temporality, and that an LGTM
   backend has to convert them to cumulative. A Prometheus without the

@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { baseMetricName, EmfEncoder, k6JsonToEmf } from "./emf.js";
 import { outputFromEnv } from "./index.js";
 import { k6Args, k6OtelEnv, type RunShardInput, runShard } from "./runner.js";
@@ -269,6 +272,14 @@ describe("k6OtelEnv", () => {
 });
 
 describe("runShard", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "kagero-k6-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
   function fakeDeps(nowRef: { t: number }) {
     return {
       clock: {
@@ -290,7 +301,7 @@ describe("runShard", () => {
         shardIndex: 0,
         shardCount: 2,
         output: { kind: "emf", namespace: "kagero/k6" },
-        jsonOutPath: "/tmp/k6-out.json",
+        jsonOutPath: join(dir, "k6-out.json"),
       },
       {
         ...fakeDeps(now),
@@ -315,7 +326,7 @@ describe("runShard", () => {
 
   it("returns the exit code when k6 dies before writing the json file", async () => {
     const r = await runShard(
-      { ...BASE_INPUT, output: { kind: "emf" }, jsonOutPath: "/tmp/none.json" },
+      { ...BASE_INPUT, output: { kind: "emf" }, jsonOutPath: join(dir, "none.json") },
       {
         clock: { now: () => 4999, sleep: async () => {} },
         spawn: async () => ({ code: 108, stdout: "", stderr: "script error" }),
@@ -328,6 +339,25 @@ describe("runShard", () => {
     expect(r.exitCode).toBe(108);
     expect(r.emfLines).toBe(0);
     expect(r.emfSkipped).toBe(1);
+  });
+
+  it("never re-emits the json file a previous shard left behind", async () => {
+    const jsonOutPath = join(dir, "k6-out.json");
+    // A warm execution environment keeps /tmp from the last invocation.
+    await writeFile(jsonOutPath, `${at(K6_LINES, 1)}\n`);
+    const emitted: string[] = [];
+    const r = await runShard(
+      { ...BASE_INPUT, output: { kind: "emf" }, jsonOutPath },
+      {
+        clock: { now: () => 4999, sleep: async () => {} },
+        // k6 fails to compile the script and never opens its output.
+        spawn: async () => ({ code: 107, stdout: "", stderr: "could not initialize" }),
+        emit: (l) => emitted.push(l),
+      },
+    );
+    expect(r.exitCode).toBe(107);
+    expect(r.emfLines).toBe(0);
+    expect(emitted).toEqual([]);
   });
 
   it("refuses extra tags that smuggle forbidden metric labels", () => {

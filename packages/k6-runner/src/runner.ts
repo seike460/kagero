@@ -15,6 +15,7 @@
  */
 
 import { createReadStream } from "node:fs";
+import { rm } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { METRIC_LABEL_FORBIDDEN } from "@kagero/semconv";
 import { type FetchLike, type GrafanaAnnotations, postRunAnnotation } from "./annotations.js";
@@ -79,7 +80,7 @@ export interface RunShardInput {
   extraTags?: Record<string, string>;
   /** Forward-schedule bound for waitForStart. */
   maxWaitMs?: number;
-  /** Temp path for the json file in emf mode. */
+  /** Temp path for the json file in emf mode (default /tmp/k6-out.json). */
   jsonOutPath?: string;
   /** When set, a start→end region annotation is posted. */
   grafana?: GrafanaAnnotations;
@@ -118,6 +119,8 @@ export interface RunShardResult {
   /** Unparseable k6 json lines in emf mode. */
   emfSkipped: number;
 }
+
+const DEFAULT_JSON_OUT_PATH = "/tmp/k6-out.json";
 
 /** Default line source for the EMF path — streams the k6 json output
  *  one line at a time (the file scales with point count and can reach
@@ -159,7 +162,7 @@ export function k6Args(input: RunShardInput): string[] {
       args.push("-o", "opentelemetry");
       break;
     case "emf":
-      args.push("--out", `json=${input.jsonOutPath ?? "/tmp/k6-out.json"}`);
+      args.push("--out", `json=${input.jsonOutPath ?? DEFAULT_JSON_OUT_PATH}`);
       break;
     case "json-file":
       args.push("--out", `json=${input.output.path}`);
@@ -242,6 +245,11 @@ export async function runShard(
   if (input.output.kind === "emf" && input.output.namespace?.startsWith("AWS/")) {
     throw new Error("EMF namespace must not start with 'AWS/'");
   }
+  const jsonOutPath = input.jsonOutPath ?? DEFAULT_JSON_OUT_PATH;
+  // /tmp outlives the invocation in a warm execution environment, and a
+  // k6 that dies before initialising its output leaves the file as it
+  // was — the previous shard's points would go out under this run's ids.
+  if (input.output.kind === "emf") await rm(jsonOutPath, { force: true });
 
   const clock = deps.clock ?? systemClock;
   const { skewMs } = await waitForStart(input.startAtMs, clock, input.maxWaitMs);
@@ -273,7 +281,7 @@ export async function runShard(
     // (drained-but-unemitted lines are already gone by then anyway).
     let lines: AsyncIterable<string> | undefined;
     try {
-      lines = readLines(input.jsonOutPath ?? "/tmp/k6-out.json");
+      lines = readLines(jsonOutPath);
     } catch {
       emfSkipped++;
     }
