@@ -40,6 +40,10 @@ const MAX_CONN: usize = 32;
 /// Request body cap — runHookPayload is small; huge bodies are hostile.
 const MAX_BODY: usize = 1 << 20;
 
+/// Status code and JSON body Lambda sees, plus the `kagero.hook.status`
+/// the hook-result counter records.
+type HookReply = (StatusCode, Value, sem::HookStatus);
+
 pub struct Agent {
     pub cfg: Config,
     pub app: App,
@@ -133,7 +137,7 @@ impl Agent {
             return (*code, payload.clone());
         }
 
-        let (code, payload) = match hook {
+        let (code, payload, status) = match hook {
             "ready" | "validate" => self.handle_build_hook(hook, body, deadline).await,
             "run" => self.handle_run(body, deadline).await,
             "suspend" => self.handle_suspend(body, deadline).await,
@@ -143,7 +147,11 @@ impl Agent {
             // today — return 404 rather than unreachable!() anyway: a
             // panic here would take down PID 1 if a future caller
             // bypasses route()'s filter.
-            _ => (StatusCode::NOT_FOUND, json!({"error": "unknown hook"})),
+            _ => (
+                StatusCode::NOT_FOUND,
+                json!({"error": "unknown hook"}),
+                sem::HookStatus::Error,
+            ),
         };
         if !repeatable
             && code.is_success()
@@ -157,7 +165,6 @@ impl Agent {
         // skipped entirely when the hook budget is already spent (a
         // zero-timeout POST would just inflate the failure counter).
         if RUNTIME_HOOKS.contains(&hook) {
-            let status = if code.is_success() { "ok" } else { "error" };
             let budget = self.remaining(deadline).min(Duration::from_secs(2));
             if !budget.is_zero() {
                 let _ = self.otlp.hook_result(hook, status, budget).await;
@@ -204,30 +211,21 @@ impl Agent {
 
     /// /ready and /validate: app first, then kagero's own build checks.
     /// Failures fail the build (fail-stop), unlike runtime hooks.
-    async fn handle_build_hook(
-        &self,
-        hook: &str,
-        body: &[u8],
-        deadline: Instant,
-    ) -> (StatusCode, Value) {
+    async fn handle_build_hook(&self, hook: &str, body: &[u8], deadline: Instant) -> HookReply {
         let out = self.relay_to_app(hook, body, deadline).await;
-        match out {
-            RelayOutcome::Failed(code, text) => (
-                StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_GATEWAY),
-                json!({"app_error": text}),
-            ),
-            _ => {
-                // kagero-side build check: the collector template must render.
-                if let Err(e) = self.build_check() {
-                    error!(?e, hook, "kagero build check failed");
-                    return (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        json!({"kagero_error": format!("{e:#}")}),
-                    );
-                }
-                (StatusCode::OK, json!({"status": "ok"}))
-            }
+        if matches!(out, RelayOutcome::TimedOut(_) | RelayOutcome::Failed(_, _)) {
+            return self.app_response(out);
         }
+        // kagero-side build check: the collector template must render.
+        if let Err(e) = self.build_check() {
+            error!(?e, hook, "kagero build check failed");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"kagero_error": format!("{e:#}")}),
+                sem::HookStatus::Error,
+            );
+        }
+        (StatusCode::OK, json!({"status": "ok"}), hook_status(&out))
     }
 
     fn build_check(&self) -> Result<()> {
@@ -254,28 +252,38 @@ impl Agent {
 
     /// The hook response Lambda sees: the app's verdict on success, a 502
     /// carrying its error body otherwise.
-    fn app_response(&self, out: RelayOutcome) -> (StatusCode, Value) {
+    fn app_response(&self, out: RelayOutcome) -> HookReply {
+        let status = hook_status(&out);
         match out {
             RelayOutcome::Failed(code, text) => (
                 StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_GATEWAY),
                 json!({"app_error": text}),
+                status,
             ),
-            _ => (
+            RelayOutcome::TimedOut(text) => {
+                (StatusCode::BAD_GATEWAY, json!({"app_error": text}), status)
+            }
+            RelayOutcome::Ok | RelayOutcome::Unimplemented | RelayOutcome::NoListener => (
                 StatusCode::OK,
                 json!({"status": "ok", "app_exited": self.app.had_exited()}),
+                status,
             ),
         }
     }
 
     /// /run: kagero first (identity → secrets → collector → usage → run event),
     /// then relay to the app so its first telemetry already carries identity.
-    async fn handle_run(&self, body: &[u8], deadline: Instant) -> (StatusCode, Value) {
+    async fn handle_run(&self, body: &[u8], deadline: Instant) -> HookReply {
         let parsed: Value = match serde_json::from_slice(body) {
             Ok(v) => v,
             Err(e) => {
                 self.degraded("run", &format!("bad /run body: {e:#}"), deadline)
                     .await;
-                return (StatusCode::BAD_REQUEST, json!({"error": "invalid json"}));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json!({"error": "invalid json"}),
+                    sem::HookStatus::Error,
+                );
             }
         };
         let id = identity_from_run_body(
@@ -379,7 +387,7 @@ impl Agent {
 
     /// /suspend: app first (flush), then kagero sends the usage summary and
     /// the suspend event with synchronous export (ADR-006).
-    async fn handle_suspend(&self, body: &[u8], deadline: Instant) -> (StatusCode, Value) {
+    async fn handle_suspend(&self, body: &[u8], deadline: Instant) -> HookReply {
         let app_out = self.relay_to_app("suspend", body, deadline).await;
 
         self.usage.mark_suspend().await;
@@ -405,7 +413,7 @@ impl Agent {
 
     /// /resume: kagero first (bookkeeping → reconnect), then app, then the
     /// lifecycle event records what actually happened (§4-3 sequence).
-    async fn handle_resume(&self, body: &[u8], deadline: Instant) -> (StatusCode, Value) {
+    async fn handle_resume(&self, body: &[u8], deadline: Instant) -> HookReply {
         let suspended_secs = self.usage.mark_resume().await;
 
         // Clock skew: a huge delta indicates the wall clock is not settled
@@ -476,7 +484,7 @@ impl Agent {
 
     /// /terminate: app first (flush), then final summary + terminate event,
     /// then SIGTERM the collector and the app (ADR-006 order).
-    async fn handle_terminate(&self, body: &[u8], deadline: Instant) -> (StatusCode, Value) {
+    async fn handle_terminate(&self, body: &[u8], deadline: Instant) -> HookReply {
         let app_out = self.relay_to_app("terminate", body, deadline).await;
 
         // Close any open suspend interval before the final accounting.
@@ -606,9 +614,20 @@ fn app_result_str(o: &RelayOutcome) -> &'static str {
         RelayOutcome::Ok => sem::AppResult::Ok,
         RelayOutcome::Unimplemented => sem::AppResult::Unimplemented,
         RelayOutcome::NoListener => sem::AppResult::NoListener,
-        RelayOutcome::Failed(_, _) => sem::AppResult::Failed,
+        RelayOutcome::TimedOut(_) | RelayOutcome::Failed(_, _) => sem::AppResult::Failed,
     }
     .as_str()
+}
+
+/// `kagero.hook.status` for the hook-result counter. A hook-less app
+/// (404 or nothing listening) counts as unimplemented, not as ok.
+fn hook_status(o: &RelayOutcome) -> sem::HookStatus {
+    match o {
+        RelayOutcome::Ok => sem::HookStatus::Ok,
+        RelayOutcome::Unimplemented | RelayOutcome::NoListener => sem::HookStatus::Unimplemented,
+        RelayOutcome::TimedOut(_) => sem::HookStatus::Timeout,
+        RelayOutcome::Failed(_, _) => sem::HookStatus::Error,
+    }
 }
 
 /// Serve the hook endpoint on `addr` until the process dies.
@@ -810,5 +829,34 @@ pub async fn serve_admin(agent: std::sync::Arc<Agent>, addr: SocketAddr) -> Resu
             });
             serve_http1(stream, svc, CONN_LIFE, peer).await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The counter must be able to carry every registry value of
+    /// kagero.hook.status — a value the agent never sends would leave
+    /// dashboards built on it empty.
+    #[test]
+    fn hook_status_distinguishes_every_relay_outcome() {
+        assert_eq!(hook_status(&RelayOutcome::Ok), sem::HookStatus::Ok);
+        assert_eq!(
+            hook_status(&RelayOutcome::Unimplemented),
+            sem::HookStatus::Unimplemented
+        );
+        assert_eq!(
+            hook_status(&RelayOutcome::NoListener),
+            sem::HookStatus::Unimplemented
+        );
+        assert_eq!(
+            hook_status(&RelayOutcome::TimedOut(String::new())),
+            sem::HookStatus::Timeout
+        );
+        assert_eq!(
+            hook_status(&RelayOutcome::Failed(500, String::new())),
+            sem::HookStatus::Error
+        );
     }
 }

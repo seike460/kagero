@@ -14,6 +14,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   no longer go through `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`, and
   the hook relay no longer follows redirects returned by the app. Only
   the Secrets Manager call still honors the proxy settings.
+- **Agent**: `kagero.microvm.hook_results` now labels `kagero.hook.status`
+  with every registry value. A hook the app does not answer within its
+  budget is `timeout`, and an app that returns 404 or does not listen is
+  `unimplemented`. Before, the agent sent only `ok` / `error`, so a 404
+  counted as `ok` and a timeout as `error`.
 
 ## [0.1.0] — 2026-09-28
 

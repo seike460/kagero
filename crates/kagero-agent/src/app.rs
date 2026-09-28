@@ -19,6 +19,8 @@ pub enum RelayOutcome {
     /// Connection refused — the app does not listen for hooks at all;
     /// also treated as "unimplemented" so hook-less apps work.
     NoListener,
+    /// The app took the hook but did not answer within the budget.
+    TimedOut(String),
     /// Any other status or transport failure — the app answered but
     /// failed, or couldn't be reached mid-request.
     Failed(u16, String),
@@ -148,6 +150,8 @@ impl App {
             Err(e) => {
                 if e.is_connect() {
                     RelayOutcome::NoListener
+                } else if e.is_timeout() {
+                    RelayOutcome::TimedOut(e.to_string())
                 } else {
                     RelayOutcome::Failed(0, e.to_string())
                 }
@@ -218,6 +222,13 @@ mod tests {
         let out = relay(app, Duration::from_secs(5)).await;
         assert!(matches!(out, RelayOutcome::Failed(307, _)));
         assert_eq!(elsewhere_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn relay_reports_a_silent_app_as_timed_out() {
+        let (app, _) = fake_app(None).await;
+        let out = relay(app, Duration::from_millis(200)).await;
+        assert!(matches!(out, RelayOutcome::TimedOut(_)));
     }
 
     #[tokio::test]

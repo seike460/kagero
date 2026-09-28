@@ -201,8 +201,14 @@ impl OtlpSender {
 
     /// Per-hook outcome counter (kagero.hook.name / kagero.hook.status —
     /// both registry-allowed metric labels).
-    pub async fn hook_result(&self, hook: &str, status: &str, budget: Duration) -> Result<()> {
+    pub async fn hook_result(
+        &self,
+        hook: &str,
+        status: sem::HookStatus,
+        budget: Duration,
+    ) -> Result<()> {
         let now = unix_nanos();
+        let status = status.as_str();
         let count = self.bump(format!("hook:{hook}:{status}"));
         let attrs = vec![
             attr(sem::ATTR_KAGERO_HOOK_NAME, hook),
