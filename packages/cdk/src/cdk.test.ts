@@ -2,7 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { App, type CfnElement, Stack, aws_secretsmanager as secretsmanager } from "aws-cdk-lib";
+import {
+  App,
+  type CfnElement,
+  CfnParameter,
+  Stack,
+  aws_secretsmanager as secretsmanager,
+} from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { afterEach, describe, expect, it } from "vitest";
 import { KageroDurableStitcher } from "./durable.js";
@@ -174,6 +180,33 @@ describe("kageroEnvironment", () => {
     });
     expect(env.KAGERO_TENANT_JSON_POINTER).toBe("/tenant/id");
     expect(env.KAGERO_SESSION_JSON_POINTER).toBe("/a~1b/~0c");
+  });
+
+  it("rejects hook peer entries the agent refuses at boot", () => {
+    for (const bad of [
+      "10.0.0.0/33",
+      "::1/129",
+      "not-an-ip/8",
+      "10.0.0.0/8,010.0.0.1",
+      "fe80::1%eth0",
+      "[::1]",
+      "10.0.0.0/-1",
+      "10.0.0.0/8/9",
+    ]) {
+      expect(() => kageroEnvironment({ ...baseKagero(), hookAllowedPeers: bad })).toThrow(
+        /hookAllowedPeers/,
+      );
+    }
+    const peers = " 10.0.0.0/8, 127.0.0.1 ,,fd00::/8,::/0,192.168.0.0/";
+    const env = kageroEnvironment({ ...baseKagero(), hookAllowedPeers: peers });
+    expect(env.KAGERO_HOOK_ALLOWED_PEERS).toBe(peers);
+  });
+
+  it("leaves hook peers given as an unresolved token to the agent", () => {
+    const { stack } = makeStack();
+    const peers = new CfnParameter(stack, "Peers").valueAsString;
+    const env = kageroEnvironment({ ...baseKagero(), hookAllowedPeers: peers });
+    expect(env.KAGERO_HOOK_ALLOWED_PEERS).toBe(peers);
   });
 
   it("rejects any KAGERO_* key in extraEnvironment", () => {

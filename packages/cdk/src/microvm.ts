@@ -12,7 +12,8 @@
  *   are rejected (secrets arrive via Secrets Manager at /run).
  */
 
-import { Annotations, aws_lambda as lambda } from "aws-cdk-lib";
+import { isIP } from "node:net";
+import { Annotations, aws_lambda as lambda, Token } from "aws-cdk-lib";
 import { Construct } from "constructs";
 
 export const KAGERO_DEFAULT_HOOK_PORT = 2018;
@@ -93,7 +94,7 @@ export interface KageroMicrovmConfig {
   region?: string;
   appUid?: number;
   appGid?: number;
-  /** Comma-separated CIDR prefixes allowed on the hook port. */
+  /** Comma-separated CIDRs or bare IPs allowed on the hook port. */
   hookAllowedPeers?: string;
   /** Secrets Manager ARN the agent fetches at /run — a reference, not
    *  the secret itself (ADR-011 allows ARNs in env). */
@@ -196,6 +197,27 @@ function checkEndpoint(label: string, v: string): void {
   }
 }
 
+/** Mirrors the agent's PeerRule::parse (config.rs): each entry is an IP
+ *  or IP/prefix within the family's width, else PID 1 bails at boot.
+ *  Node's isIP also admits IPv6 zone IDs, which the agent rejects. */
+function checkHookPeers(v: string): void {
+  if (Token.isUnresolved(v)) return;
+  for (const entry of v.split(",").map((s) => s.trim())) {
+    if (entry === "") continue;
+    const slash = entry.indexOf("/");
+    const addr = slash < 0 ? entry : entry.slice(0, slash);
+    const prefix = slash < 0 ? "" : entry.slice(slash + 1);
+    const family = addr.includes("%") ? 0 : isIP(addr);
+    const max = family === 4 ? 32 : 128;
+    if (family === 0 || (prefix !== "" && !(/^\+?\d+$/.test(prefix) && Number(prefix) <= max))) {
+      throw new Error(
+        `hookAllowedPeers entry ${JSON.stringify(entry)} must be an IP or CIDR ` +
+          `(prefix up to /32 for IPv4, /128 for IPv6)`,
+      );
+    }
+  }
+}
+
 /** The env var list — pure for tests, single source for image+agent. */
 export function kageroEnvironment(cfg: KageroMicrovmConfig): Record<string, string> {
   const env: Record<string, string> = {
@@ -247,6 +269,7 @@ export function kageroEnvironment(cfg: KageroMicrovmConfig): Record<string, stri
       );
     }
   }
+  if (cfg.hookAllowedPeers !== undefined) checkHookPeers(cfg.hookAllowedPeers);
   for (const [label, v] of [
     ["collectorConfigTemplate", cfg.collectorConfigTemplate],
     ["collectorConfigOut", cfg.collectorConfigOut],

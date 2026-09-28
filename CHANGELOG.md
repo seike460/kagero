@@ -20,6 +20,9 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   `KAGERO_MICROVM_BASELINE_VCPU` must be positive finite numbers.
 - **CDK**: `KageroMicrovmImage` applies the same endpoint, JSON Pointer
   and `hookPort` checks at synth time.
+- **CDK**: `KageroMicrovmImage` rejects a `hookAllowedPeers` entry that
+  is not an IP or CIDR at synth time. The agent already refused such an
+  entry at boot.
 - **CDK**: the default dead-letter queue of `KageroDurableStitcher` now
   denies requests that do not use TLS (`enforceSSL`).
 - **Agent**: the hook port and the admin port are bound before the app
