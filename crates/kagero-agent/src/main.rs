@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
 
     let app_command = parse_app_command();
     let cfg = Config::from_env(app_command)?;
-    info!(?cfg, "kagero starting");
+    info!(cfg = ?cfg.redacted(), "kagero starting");
 
     // PID 1: reap everything, including adopted orphans.
     let reaper = Reaper::start();

@@ -237,6 +237,19 @@ fn endpoint_safe(v: &str) -> bool {
         .all(|c| c.is_ascii() && !c.is_ascii_control() && !matches!(c, '"' | '\\' | '$' | '`'))
 }
 
+/// Mask the userinfo of a URL (`user:pass@`) — the startup log prints
+/// the whole Config, and endpoint_safe lets userinfo through.
+fn redact_userinfo(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    match rest[..authority_end].rfind('@') {
+        Some(at) => format!("{scheme}://REDACTED@{}", &rest[at + 1..]),
+        None => url.to_string(),
+    }
+}
+
 fn env_endpoint(get: Lookup, key: &str) -> Result<Option<String>> {
     match get(key)? {
         Some(v) if v.is_empty() => Ok(None),
@@ -476,6 +489,27 @@ impl Config {
     /// only the /run fetch provides, so the first start waits for /run.
     pub fn collector_starts_at_build(&self) -> bool {
         self.collector_start == CollectorStart::Build && self.secret_arn.is_none()
+    }
+
+    /// A copy for the startup log, with URL userinfo masked.
+    pub fn redacted(&self) -> Config {
+        let mut c = self.clone();
+        for url in [
+            &mut c.otlp_endpoint_lgtm,
+            &mut c.otlp_endpoint_cloudwatch,
+            &mut c.otlp_endpoint_cw_metrics,
+            &mut c.otlp_endpoint_cw_logs,
+            &mut c.otlp_endpoint_cw_traces,
+            &mut c.collector_reload_url,
+            &mut c.secrets_endpoint,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            *url = redact_userinfo(url);
+        }
+        c.imds_endpoint = redact_userinfo(&c.imds_endpoint);
+        c
     }
 
     pub fn hook_timeout(&self, hook: &str) -> Duration {
@@ -771,6 +805,45 @@ mod tests {
         ]));
         assert!(!starts(&[("KAGERO_COLLECTOR_START", "run")]));
         assert!(!starts(&[]));
+    }
+
+    #[test]
+    fn startup_log_masks_url_userinfo() {
+        let cfg = from_vars(
+            USER,
+            &[
+                (
+                    "KAGERO_OTLP_ENDPOINT_LGTM",
+                    "https://user:s3cret@lgtm.example.com:4318/v1?x=1",
+                ),
+                (
+                    "KAGERO_COLLECTOR_RELOAD_URL",
+                    "http://admin:hunter2@127.0.0.1:12345/-/reload",
+                ),
+                ("KAGERO_IMDS_ENDPOINT", "http://tok@169.254.169.254"),
+            ],
+        )
+        .unwrap();
+        let logged = format!("{:?}", cfg.redacted());
+        for secret in ["s3cret", "user:", "hunter2", "admin:", "tok@"] {
+            assert!(
+                !logged.contains(secret),
+                "{secret:?} reached the log: {logged}"
+            );
+        }
+        assert!(logged.contains("https://REDACTED@lgtm.example.com:4318/v1?x=1"));
+        assert!(logged.contains("http://REDACTED@169.254.169.254"));
+        // Only the authority is userinfo — an '@' in the path stays.
+        assert_eq!(
+            redact_userinfo("https://host:4318/v1/a@b?c=@"),
+            "https://host:4318/v1/a@b?c=@"
+        );
+        assert_eq!(redact_userinfo("not a url"), "not a url");
+        // The running config keeps the real endpoint.
+        assert_eq!(
+            cfg.otlp_endpoint_lgtm.as_deref(),
+            Some("https://user:s3cret@lgtm.example.com:4318/v1?x=1")
+        );
     }
 
     #[test]

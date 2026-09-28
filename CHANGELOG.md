@@ -39,6 +39,8 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Agent**: a deliberate collector restart (for example `/resume`
   without `KAGERO_COLLECTOR_RELOAD_URL`) no longer logs the old process
   as `child exited on its own`.
+- **Agent**: the `kagero starting` log masks the userinfo
+  (`user:password@`) of endpoint URLs.
 - **Agent**: with `KAGERO_COLLECTOR_START=build` and `KAGERO_SECRET_ARN`
   both set, the collector now waits for `/run` as documented. Before, the
   build-time start failed and logged a `kagero.lifecycle.degraded` event
