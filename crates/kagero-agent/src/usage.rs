@@ -25,7 +25,6 @@ pub struct UsageSnapshot {
     pub running_seconds: f64,
     pub burst_vcpu_seconds: f64,
     pub burst_gib_seconds: f64,
-    pub suspend_seconds: f64,
     pub resumes: u64,
     pub suspends: u64,
     /// Suspend-duration histogram in OTLP shape: len = bounds+1, each
@@ -33,7 +32,8 @@ pub struct UsageSnapshot {
     /// last bucket = observations above the last bound). The sum of
     /// suspend_buckets must equal suspend_count — exporting cumulative
     /// (le-style) counts would violate the OTLP data model and break
-    /// backends that re-cumulate. suspend_sum is the OTLP `sum`.
+    /// backends that re-cumulate. suspend_sum is the OTLP `sum` and the
+    /// summary log's total suspended seconds.
     pub suspend_count: u64,
     pub suspend_sum: f64,
     pub suspend_buckets: Vec<u64>,
@@ -64,7 +64,6 @@ impl Usage {
                     running_seconds: 0.0,
                     burst_vcpu_seconds: 0.0,
                     burst_gib_seconds: 0.0,
-                    suspend_seconds: 0.0,
                     resumes: 0,
                     suspends: 0,
                     suspend_count: 0,
@@ -130,7 +129,7 @@ impl Usage {
     }
 
     /// Close an open suspend interval — /terminate can arrive while the VM
-    /// is suspended, which would otherwise leave suspend_seconds uncounted.
+    /// is suspended, which would otherwise leave that interval uncounted.
     pub async fn finalize(&self) {
         let mut g = self.inner.lock().await;
         if let Some(t0) = g.suspend_started_nanos.take() {
@@ -280,7 +279,6 @@ impl Usage {
 }
 
 fn record_suspend_observation(snap: &mut UsageSnapshot, secs: f64) {
-    snap.suspend_seconds += secs;
     snap.suspend_count += 1;
     snap.suspend_sum += secs;
     // Per-bucket count — OTLP requires sum(bucketCounts) == count.
@@ -332,7 +330,7 @@ mod tests {
         let s = u.snapshot().await;
         assert_eq!(s.suspends, 1);
         assert_eq!(s.resumes, 1);
-        assert!(s.suspend_seconds >= 0.005);
+        assert!(s.suspend_sum >= 0.005);
     }
 
     #[test]
@@ -341,7 +339,6 @@ mod tests {
             running_seconds: 0.0,
             burst_vcpu_seconds: 0.0,
             burst_gib_seconds: 0.0,
-            suspend_seconds: 0.0,
             resumes: 0,
             suspends: 0,
             suspend_count: 0,

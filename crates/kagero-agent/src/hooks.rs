@@ -597,7 +597,7 @@ impl Agent {
         );
         fields.insert(
             sem::ATTR_KAGERO_USAGE_SUSPEND_SECONDS.into(),
-            json!(snap.suspend_seconds),
+            json!(snap.suspend_sum),
         );
         fields.insert(sem::ATTR_KAGERO_USAGE_SUSPENDS.into(), json!(snap.suspends));
         fields.insert(sem::ATTR_KAGERO_USAGE_RESUMES.into(), json!(snap.resumes));
