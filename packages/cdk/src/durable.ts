@@ -38,6 +38,9 @@ export interface KageroDurableStitcherProps {
    * KAGERO_OTLP_ENDPOINT_CLOUDWATCH — the LGTM endpoint is required;
    * the CloudWatch side may be omitted to use region-derived AWS
    * defaults (see packages/durable-stitcher handlerFromEnv).
+   * `cloudwatch` and `both` grant the role xray:PutTraceSegments,
+   * xray:PutSpans and cloudwatch:PutMetricData; the X-Ray OTLP
+   * endpoint also needs Transaction Search enabled in the account.
    */
   backend: "lgtm" | "cloudwatch" | "both";
   /** LGTM endpoint — required when backend is "both". */
@@ -171,6 +174,20 @@ export class KageroDurableStitcher extends Construct {
         ],
       }),
     );
+
+    // The handler SigV4-signs its CloudWatch posts with this role:
+    // traces to xray.<region>, metrics to monitoring.<region>. AWS's
+    // OTLP setup guides grant PutTraceSegments (CloudWatchAgentServerPolicy)
+    // while the service authorization reference lists PutSpans for
+    // OTLP spans — grant both. X-Ray's Put actions take no resource ARN.
+    if (props.backend !== "lgtm") {
+      this.fn.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["xray:PutTraceSegments", "xray:PutSpans", "cloudwatch:PutMetricData"],
+          resources: ["*"],
+        }),
+      );
+    }
 
     this.rule = new events.Rule(this, "StatusRule", {
       eventPattern: {

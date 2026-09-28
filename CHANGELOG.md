@@ -54,6 +54,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Agent**: a tenant or session id with no allowed character left
   (ASCII letters, digits and `._-@:/+=`) is omitted instead of being
   sent as an empty `kagero.tenant.id` / `kagero.session.id`.
+- **CDK**: `KageroDurableStitcher` with `backend` `cloudwatch` or `both`
+  now grants its role `xray:PutTraceSegments`, `xray:PutSpans` and
+  `cloudwatch:PutMetricData`. Before, AWS denied every export to the
+  CloudWatch OTLP endpoints. Traces to X-Ray also need Transaction Search
+  enabled in the account.
 
 ## [0.1.0] — 2026-09-28
 

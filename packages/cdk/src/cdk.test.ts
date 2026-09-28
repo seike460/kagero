@@ -343,7 +343,25 @@ describe("KageroDurableStitcher", () => {
     expect(JSON.stringify(history?.Resource)).toContain("function:*");
     // secretsmanager read granted for the header secret.
     expect(findStatement(t, "secretsmanager:GetSecretValue")).toBeDefined();
+    // The lgtm backend never signs AWS requests — no OTLP write grants.
+    expect(findStatement(t, "xray:PutTraceSegments")).toBeUndefined();
+    expect(findStatement(t, "cloudwatch:PutMetricData")).toBeUndefined();
   });
+
+  for (const backend of ["cloudwatch", "both"] as const) {
+    it(`grants the CloudWatch OTLP writes the ${backend} backend signs with`, () => {
+      const { stack } = makeStack();
+      new KageroDurableStitcher(stack, "Stitch", {
+        entry: FIXTURE_ENTRY,
+        backend,
+        otlpEndpointLgtm: "https://lgtm.example.com/otlp",
+      });
+      const t = Template.fromStack(stack);
+      for (const action of ["xray:PutTraceSegments", "xray:PutSpans", "cloudwatch:PutMetricData"]) {
+        expect(findStatement(t, action)?.Resource).toBe("*");
+      }
+    });
+  }
 
   it("backend 'both' emits the two per-backend endpoint env vars", () => {
     const { stack } = makeStack();
