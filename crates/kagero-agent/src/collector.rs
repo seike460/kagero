@@ -221,8 +221,10 @@ fn secret_value_safe(v: &str) -> bool {
 
 pub struct Collector {
     pid: std::sync::Arc<Mutex<Option<u32>>>,
-    /// Set before a deliberate stop so the exit watcher doesn't cry crash.
-    expected_exit: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The current child's deliberate-stop flag, set before a stop so its
+    /// exit watcher doesn't cry crash. Every spawn gets a fresh flag: a
+    /// restart must not clear the flag the old child's watcher still reads.
+    expected_exit: Mutex<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     reaper: &'static Reaper,
     /// Canonical config path the rendered file was last written to. The
     /// collector argv must use THIS, never cfg.collector_config_out: the
@@ -235,7 +237,7 @@ impl Collector {
     pub fn new(reaper: &'static Reaper) -> Self {
         Self {
             pid: std::sync::Arc::new(Mutex::new(None)),
-            expected_exit: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            expected_exit: Mutex::default(),
             reaper,
             resolved_out: Mutex::new(None),
         }
@@ -352,19 +354,14 @@ impl Collector {
             // export — it is trusted code, unlike the app.
             scrub_aws_env: false,
         })?;
-        // Clear the deliberate-stop flag — a crash after a restart must
-        // still be reported as a crash by the exit watcher.
-        self.expected_exit
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let expected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        *self
+            .expected_exit
+            .lock()
+            .map_err(|_| anyhow::anyhow!("collector lock poisoned"))? = expected.clone();
         *self.lock()? = Some(pid);
         info!(pid, "collector started");
-        process::watch_exit(
-            self.reaper,
-            pid,
-            "collector",
-            self.pid.clone(),
-            self.expected_exit.clone(),
-        );
+        process::watch_exit(self.reaper, pid, "collector", self.pid.clone(), expected);
         // Wait for the OTLP receiver to actually listen — a just-spawned
         // collector takes a few hundred ms, and telemetry posted in that
         // gap hits connection-refused and is dropped forever.
@@ -421,6 +418,8 @@ impl Collector {
     /// budget), SIGKILL. Used at /terminate and when the container stops.
     pub async fn stop(&self, budget: std::time::Duration) -> Result<()> {
         self.expected_exit
+            .lock()
+            .map_err(|_| anyhow::anyhow!("collector lock poisoned"))?
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let Some(pid) = self.lock()?.take() else {
             return Ok(());
@@ -1090,6 +1089,41 @@ mod tests {
         cfg.otlp_endpoint_lgtm = Some("".into());
         let out = render_template("ep: {{KAGERO_ENDPOINT_LGTM}}", &cfg, &ctx(&id));
         assert!(out.contains("{{KAGERO_ENDPOINT_LGTM}}"));
+    }
+
+    /// A restart must not clear the flag the OLD child's exit watcher
+    /// reads — otherwise every deliberate restart (e.g. /resume without a
+    /// reload URL) logs "child exited on its own".
+    #[tokio::test]
+    async fn restart_keeps_the_old_childs_stop_flag() {
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+        let mut cfg = config::fixture();
+        cfg.collector_bin = Some("/bin/sh".into());
+        cfg.collector_args = vec!["-c".into(), "exec sleep 30".into()];
+        let c = Collector::new(crate::process::Reaper::idle());
+        *c.resolved_out.lock().unwrap() = Some("/dev/null".into());
+
+        c.start(&cfg, Duration::ZERO).await.unwrap();
+        let first_pid = c.pgid().unwrap();
+        let first = c.expected_exit.lock().unwrap().clone();
+        c.stop(Duration::ZERO).await.unwrap();
+        c.start(&cfg, Duration::ZERO).await.unwrap();
+        let second_pid = c.pgid().unwrap();
+        let second = c.expected_exit.lock().unwrap().clone();
+        c.stop(Duration::ZERO).await.unwrap();
+        // No reaper thread under test — reap both children here.
+        for pid in [first_pid, second_pid] {
+            while unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 0) } == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+            {}
+        }
+
+        assert!(
+            first.load(Ordering::Relaxed),
+            "the first child's exit must still read as deliberate"
+        );
+        assert!(!std::sync::Arc::ptr_eq(&first, &second));
     }
 
     #[test]

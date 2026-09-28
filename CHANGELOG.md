@@ -19,6 +19,9 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   budget is `timeout`, and an app that returns 404 or does not listen is
   `unimplemented`. Before, the agent sent only `ok` / `error`, so a 404
   counted as `ok` and a timeout as `error`.
+- **Agent**: a deliberate collector restart (for example `/resume`
+  without `KAGERO_COLLECTOR_RELOAD_URL`) no longer logs the old process
+  as `child exited on its own`.
 
 ## [0.1.0] — 2026-09-28
 
