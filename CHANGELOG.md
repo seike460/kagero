@@ -33,6 +33,12 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   default limit on how far ahead `startAtMs` may be is now 10 minutes
   (was 15). The wait and the k6 run share one invocation, and a
   15-minute wait left no time for k6 within the Lambda timeout.
+- **k6 runner**: `scriptPath` must be a file inside the worker. A URL
+  (other than `file:`) or `-` (stdin) is refused before the wait. k6
+  runs `https://` scripts, so whoever could start an execution could
+  run their own script with the worker role's credentials, which k6
+  exposes through `__ENV`. The script path now follows `--`, so
+  `extraArgs` can no longer replace the script either.
 
 ### Fixed
 

@@ -255,7 +255,38 @@ describe("k6Args", () => {
     expect(joined).toContain("--execution-segment-sequence 0,1/3,2/3,1");
     expect(joined).toContain("--tag run_id=run-1");
     expect(joined).toContain("--tag shard_id=1");
-    expect(args.at(-1)).toBe("/opt/script.js");
+    expect(args.slice(-2)).toEqual(["--", "/opt/script.js"]);
+  });
+
+  it("accepts only a script inside the worker", () => {
+    for (const bad of [
+      "https://evil.example/x.js",
+      "http://h/x.js",
+      "HTTPS://h/x.js",
+      "-",
+      "",
+      undefined,
+    ]) {
+      expect(() => k6Args({ ...BASE_INPUT, scriptPath: bad as string })).toThrow(/scriptPath/);
+    }
+    for (const ok of ["/opt/k6/test.js", "k6/test.js", "file:///opt/k6/test.js"]) {
+      expect(k6Args({ ...BASE_INPUT, scriptPath: ok }).at(-1)).toBe(ok);
+    }
+  });
+
+  it("keeps extraArgs from swapping in a script of their own", () => {
+    // Verified on k6 v2.3.0: `<url> --user-agent <path>` runs the URL,
+    // while `<url> --user-agent -- <path>` fails with two positionals.
+    const args = k6Args({
+      ...BASE_INPUT,
+      extraArgs: ["https://evil.example/x.js", "--user-agent"],
+    });
+    expect(args.slice(-4)).toEqual([
+      "https://evil.example/x.js",
+      "--user-agent",
+      "--",
+      "/opt/script.js",
+    ]);
   });
 
   it("uses -o opentelemetry for otlp output", () => {

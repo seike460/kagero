@@ -63,7 +63,8 @@ export type OutputConfig =
     };
 
 export interface RunShardInput {
-  /** Path to the k6 script inside the worker. */
+  /** Path to the k6 script inside the worker — a URL (k6 would fetch an
+   *  https:// script) or "-" (stdin) is refused. */
   scriptPath: string;
   runId: string;
   shardIndex: number;
@@ -132,6 +133,11 @@ async function* readJsonLines(path: string): AsyncIterable<string> {
 
 /** Build `k6 run` args for a shard — pure, for tests and review. */
 export function k6Args(input: RunShardInput): string[] {
+  if (!isLocalScriptPath(input.scriptPath)) {
+    throw new Error(
+      `scriptPath must be a file inside the worker, got ${JSON.stringify(input.scriptPath)}`,
+    );
+  }
   const spec = shardSpec(input.shardIndex, input.shardCount);
   const args = [
     "run",
@@ -168,8 +174,20 @@ export function k6Args(input: RunShardInput): string[] {
       args.push("--out", `json=${input.output.path}`);
       break;
   }
-  args.push(...(input.extraArgs ?? []), input.scriptPath);
+  // "--" pins scriptPath as the one positional: without it, extraArgs
+  // ending in a value flag (`<url> --user-agent`) turn the path into
+  // the flag's value and k6 runs the URL instead.
+  args.push(...(input.extraArgs ?? []), "--", input.scriptPath);
   return args;
+}
+
+/** k6 runs `-` from stdin and fetches https:// scripts — only a
+ *  filesystem path (or file: URL) keeps the script to what the worker
+ *  ships. */
+function isLocalScriptPath(p: string): boolean {
+  if (typeof p !== "string" || p === "" || p === "-") return false;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(p)?.[1];
+  return scheme === undefined || scheme.toLowerCase() === "file";
 }
 
 const FORBIDDEN_TAG_NAMES = new Set([
