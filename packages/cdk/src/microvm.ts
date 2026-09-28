@@ -35,6 +35,17 @@ const SECRET_KEY_RE =
 /** Agent env_safe charset (config.rs) — interpolated into templates. */
 const ENV_SAFE_RE = /^[A-Za-z0-9._\-:/+=]*$/;
 
+/** Agent endpoint_safe (config.rs): printable ASCII without `"`, `\`,
+ *  `$` or backtick — endpoints also land in shell-sourced env files. */
+const ENDPOINT_SAFE_RE = /^[\x20-\x7e]*$/;
+const ENDPOINT_UNSAFE_RE = /["\\$`]/;
+
+/** RFC 6901 JSON Pointer — the agent bails at boot on anything else. */
+const JSON_POINTER_RE = /^(\/([^~]|~[01])*)?$/;
+
+/** Collector templates bind OTLP/gRPC on this fixed port. */
+const OTLP_GRPC_PORT = 4317;
+
 export interface KageroMicrovmConfig {
   /**
    * Backend selection. `both` is forwarded verbatim to the agent, but no
@@ -58,7 +69,8 @@ export interface KageroMicrovmConfig {
   otlpEndpointCwLogs?: string;
   /** Single-backend OTLP endpoint override (KAGERO_OTLP_ENDPOINT). */
   otlpEndpoint?: string;
-  /** Hooks.Port + KAGERO_HOOK_PORT (default 2018, range 1–65535). */
+  /** Hooks.Port + KAGERO_HOOK_PORT (default 2018, range 1–65535; must
+   *  not collide with the agent's other ports 2019/2020/4318 or 4317). */
   hookPort?: number;
   /**
    * Seconds (CFN range 1–60) applied to every runtime hook timeout
@@ -172,6 +184,18 @@ function checkNoControlChars(label: string, v: string): void {
   }
 }
 
+/** Endpoints render into collector YAML/river and shell-sourced env
+ *  files — mirror the agent's endpoint_safe so a bad value fails synth,
+ *  not PID 1 at boot. */
+function checkEndpoint(label: string, v: string): void {
+  checkNoControlChars(label, v);
+  if (!ENDPOINT_SAFE_RE.test(v) || ENDPOINT_UNSAFE_RE.test(v)) {
+    throw new Error(
+      `${label} must be printable ASCII without ", \\, $ or backtick: ${JSON.stringify(v)}`,
+    );
+  }
+}
+
 /** The env var list — pure for tests, single source for image+agent. */
 export function kageroEnvironment(cfg: KageroMicrovmConfig): Record<string, string> {
   const env: Record<string, string> = {
@@ -209,6 +233,21 @@ export function kageroEnvironment(cfg: KageroMicrovmConfig): Record<string, stri
     ["otlpEndpointCwTraces", cfg.otlpEndpointCwTraces],
     ["otlpEndpointCwMetrics", cfg.otlpEndpointCwMetrics],
     ["otlpEndpointCwLogs", cfg.otlpEndpointCwLogs],
+  ] as const) {
+    if (v !== undefined) checkEndpoint(label, v);
+  }
+  for (const [label, v] of [
+    ["tenantJsonPointer", cfg.tenantJsonPointer],
+    ["sessionJsonPointer", cfg.sessionJsonPointer],
+  ] as const) {
+    if (v !== undefined && !JSON_POINTER_RE.test(v)) {
+      throw new Error(
+        `${label} must be an RFC 6901 JSON Pointer (empty, or starting with "/" ` +
+          `with ~ escaped as ~0 or ~1): ${JSON.stringify(v)}`,
+      );
+    }
+  }
+  for (const [label, v] of [
     ["collectorConfigTemplate", cfg.collectorConfigTemplate],
     ["collectorConfigOut", cfg.collectorConfigOut],
     ["collectorReloadUrl", cfg.collectorReloadUrl],
@@ -303,6 +342,18 @@ export class KageroMicrovmImage extends Construct {
     checkNumber("baselineVcpu", cfg.baselineVcpu, 0.125, 128);
     const hookPort = cfg.hookPort ?? KAGERO_DEFAULT_HOOK_PORT;
     checkRange("hookPort", hookPort, 1, 65535);
+    // The agent bails at boot when two listeners share a port (config.rs).
+    const otherPorts = [
+      KAGERO_DEFAULT_APP_HOOK_PORT,
+      KAGERO_DEFAULT_OTLP_PORT,
+      KAGERO_DEFAULT_ADMIN_PORT,
+      OTLP_GRPC_PORT,
+    ];
+    if (otherPorts.includes(hookPort)) {
+      throw new Error(
+        `hookPort ${hookPort} collides with a port the agent or collector binds (${otherPorts.join(", ")})`,
+      );
+    }
     // Runtime hooks: CFN range is 1–60 (aws-properties-lambda-
     // microvmimage-microvmhooks).
     const runtimeTimeout = cfg.runtimeHookTimeoutSeconds ?? KAGERO_DEFAULT_HOOK_TIMEOUT_SECONDS;

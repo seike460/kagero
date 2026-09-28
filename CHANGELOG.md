@@ -7,6 +7,20 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 
 ## [Unreleased]
 
+### Changed
+
+- **Agent**: startup now rejects more malformed configuration instead of
+  misbehaving later. Endpoints (`KAGERO_OTLP_ENDPOINT*`,
+  `KAGERO_ENDPOINT_CW_*`) may not contain `$` or a backtick, since they
+  land in shell-sourced env files. `KAGERO_HOOK_PORT`,
+  `KAGERO_APP_HOOK_PORT`, `KAGERO_OTLP_PORT`, `KAGERO_ADMIN_PORT` and the
+  collector's fixed OTLP/gRPC port 4317 must all differ.
+  `KAGERO_TENANT_JSON_POINTER` / `KAGERO_SESSION_JSON_POINTER` must be
+  RFC 6901 pointers, and `KAGERO_MICROVM_BASELINE_GIB` /
+  `KAGERO_MICROVM_BASELINE_VCPU` must be positive finite numbers.
+- **CDK**: `KageroMicrovmImage` applies the same endpoint, JSON Pointer
+  and `hookPort` checks at synth time.
+
 ### Fixed
 
 - **Agent**: the hook relay, the loopback OTLP export, the collector

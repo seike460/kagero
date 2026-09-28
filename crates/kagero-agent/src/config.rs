@@ -226,13 +226,14 @@ fn env_safe(get: Lookup, key: &str, default: &str) -> Result<String> {
     Ok(v)
 }
 
-/// Endpoint values render inside double-quoted YAML/Alloy strings — this
-/// predicate rejects characters that would corrupt the rendered file
-/// (quote, escape, control, non-ASCII). Looser than `env_safe`:
-/// legitimate URL chars such as `?`, `&`, `%`, `@` stay allowed.
+/// Endpoint values render inside double-quoted YAML/Alloy strings and
+/// double-quoted lines of env files that `sh` sources — this predicate
+/// rejects characters that would corrupt the rendered file or expand
+/// there (quote, escape, `$`, backtick, control, non-ASCII). Looser than
+/// `env_safe`: legitimate URL chars such as `?`, `&`, `%`, `@` stay allowed.
 fn endpoint_safe(v: &str) -> bool {
     v.chars()
-        .all(|c| c.is_ascii() && !c.is_ascii_control() && c != '"' && c != '\\')
+        .all(|c| c.is_ascii() && !c.is_ascii_control() && !matches!(c, '"' | '\\' | '$' | '`'))
 }
 
 fn env_endpoint(get: Lookup, key: &str) -> Result<Option<String>> {
@@ -243,6 +244,21 @@ fn env_endpoint(get: Lookup, key: &str) -> Result<Option<String>> {
         }
         v => Ok(v),
     }
+}
+
+/// A malformed pointer would miss on every /run without a word, dropping
+/// tenant/session ids from all telemetry — reject it at startup.
+fn env_json_pointer(get: Lookup, key: &str) -> Result<Option<String>> {
+    let v = get(key)?;
+    if let Some(p) = &v
+        && !crate::identity::pointer_is_valid(p)
+    {
+        anyhow::bail!(
+            "{key} is not an RFC 6901 JSON Pointer (empty, or starting with '/' \
+             with ~ escaped as ~0 or ~1): {p:?}"
+        );
+    }
+    Ok(v)
 }
 
 fn env_u16(get: Lookup, key: &str, default: u16) -> Result<u16> {
@@ -280,6 +296,16 @@ impl Config {
         // Pricing: 2 GiB per vCPU (research §1-2).
         let baseline_vcpu =
             env_f64(get, "KAGERO_MICROVM_BASELINE_VCPU", "vCPUs")?.unwrap_or(baseline_gib / 2.0);
+        // The baselines turn samples into burst usage: NaN would zero it and
+        // a negative value would inflate it, silently corrupting cost data.
+        for (key, v) in [
+            ("KAGERO_MICROVM_BASELINE_GIB", baseline_gib),
+            ("KAGERO_MICROVM_BASELINE_VCPU", baseline_vcpu),
+        ] {
+            if !v.is_finite() || v <= 0.0 {
+                anyhow::bail!("{key} must be a positive number: got {v}");
+            }
+        }
 
         let mut hook_timeouts = HashMap::new();
         for hook in ["ready", "validate", "run", "suspend", "resume", "terminate"] {
@@ -302,19 +328,32 @@ impl Config {
             (app_uid, gid)
         };
 
+        let hook_port = env_u16(get, "KAGERO_HOOK_PORT", 2018)?;
+        let app_hook_port = env_u16(get, "KAGERO_APP_HOOK_PORT", 2019)?;
+        let otlp_port = env_u16(get, "KAGERO_OTLP_PORT", 4318)?;
+        let admin_port = env_u16(get, "KAGERO_ADMIN_PORT", 2020)?;
+        // Every listener needs its own port — a collision surfaces only as
+        // a bind failure later (PID 1 exits, or the collector silently
+        // drops telemetry). Collector templates also bind gRPC on a fixed
+        // 4317.
+        let ports = [
+            ("KAGERO_HOOK_PORT", hook_port),
+            ("KAGERO_APP_HOOK_PORT", app_hook_port),
+            ("KAGERO_OTLP_PORT", otlp_port),
+            ("KAGERO_ADMIN_PORT", admin_port),
+            ("the collector's OTLP/gRPC port", 4317),
+        ];
+        for (i, (a, pa)) in ports.iter().enumerate() {
+            if let Some((b, _)) = ports[i + 1..].iter().find(|(_, pb)| pb == pa) {
+                anyhow::bail!("{a} and {b} both use port {pa}");
+            }
+        }
+
         Ok(Config {
-            hook_port: env_u16(get, "KAGERO_HOOK_PORT", 2018)?,
-            app_hook_port: env_u16(get, "KAGERO_APP_HOOK_PORT", 2019)?,
-            otlp_port: {
-                let p = env_u16(get, "KAGERO_OTLP_PORT", 4318)?;
-                // Collector templates also bind gRPC on a fixed 4317 —
-                // an HTTP port equal to it would collide at startup.
-                if p == 4317 {
-                    anyhow::bail!("KAGERO_OTLP_PORT must not be 4317 (reserved for OTLP/gRPC)");
-                }
-                p
-            },
-            admin_port: env_u16(get, "KAGERO_ADMIN_PORT", 2020)?,
+            hook_port,
+            app_hook_port,
+            otlp_port,
+            admin_port,
             hook_allowed_peers: {
                 let raw = get("KAGERO_HOOK_ALLOWED_PEERS")?.unwrap_or_default();
                 let mut rules = Vec::new();
@@ -386,8 +425,8 @@ impl Config {
             app_uid,
             app_gid,
 
-            tenant_pointer: get("KAGERO_TENANT_JSON_POINTER")?,
-            session_pointer: get("KAGERO_SESSION_JSON_POINTER")?,
+            tenant_pointer: env_json_pointer(get, "KAGERO_TENANT_JSON_POINTER")?,
+            session_pointer: env_json_pointer(get, "KAGERO_SESSION_JSON_POINTER")?,
 
             collector_bin: get("KAGERO_COLLECTOR_BIN")?,
             collector_args: match get("KAGERO_COLLECTOR_ARGS")? {
@@ -571,6 +610,28 @@ mod tests {
     }
 
     #[test]
+    fn well_formed_values_pass_startup() {
+        let cfg = from_vars(
+            ROOT,
+            &[
+                ("KAGERO_MICROVM_BASELINE_GIB", "0.5"),
+                ("KAGERO_MICROVM_BASELINE_VCPU", "0.25"),
+                ("KAGERO_HOOK_PORT", "8080"),
+                ("KAGERO_TENANT_JSON_POINTER", "/tenant/id"),
+                ("KAGERO_SESSION_JSON_POINTER", ""),
+                (
+                    "KAGERO_OTLP_ENDPOINT_LGTM",
+                    "https://user@host:4318/v1%20x?x=1&y=2",
+                ),
+            ],
+        )
+        .unwrap();
+        assert_eq!(cfg.hook_port, 8080);
+        assert_eq!(cfg.tenant_pointer.as_deref(), Some("/tenant/id"));
+        assert_eq!(cfg.session_pointer.as_deref(), Some(""));
+    }
+
+    #[test]
     fn malformed_values_fail_startup() {
         for (key, value) in [
             ("KAGERO_BACKEND", "aws"),
@@ -590,6 +651,20 @@ mod tests {
             ("KAGERO_COLLECTOR_ARGS", "--config"),
             ("KAGERO_COLLECTOR_START", "later"),
             ("KAGERO_SAMPLE_INTERVAL_MS", "0"),
+            ("KAGERO_MICROVM_BASELINE_GIB", "NaN"),
+            ("KAGERO_MICROVM_BASELINE_GIB", "inf"),
+            ("KAGERO_MICROVM_BASELINE_GIB", "-2"),
+            ("KAGERO_MICROVM_BASELINE_GIB", "0"),
+            ("KAGERO_MICROVM_BASELINE_VCPU", "NaN"),
+            ("KAGERO_MICROVM_BASELINE_VCPU", "-1"),
+            ("KAGERO_HOOK_PORT", "2019"),
+            ("KAGERO_HOOK_PORT", "4317"),
+            ("KAGERO_ADMIN_PORT", "4318"),
+            ("KAGERO_APP_HOOK_PORT", "2020"),
+            ("KAGERO_TENANT_JSON_POINTER", "tenant/id"),
+            ("KAGERO_SESSION_JSON_POINTER", "/session~2"),
+            ("KAGERO_OTLP_ENDPOINT_LGTM", "http://a$(id)"),
+            ("KAGERO_ENDPOINT_CW_LOGS", "https://`id`.example.com"),
         ] {
             assert!(
                 from_vars(USER, &[(key, value)]).is_err(),
@@ -664,6 +739,11 @@ mod tests {
             "http://a\nb",
             "http://a\tb",
             "http://exaｍple.com", // full-width ｍ
+            // `$` and backtick expand inside the double-quoted lines of a
+            // sourced env file, and `${env:...}` in collector YAML.
+            "http://a$(id)b",
+            "http://a`id`b",
+            "http://${env:AWS_SECRET_ACCESS_KEY}",
         ] {
             assert!(!endpoint_safe(bad), "should reject {bad:?}");
         }

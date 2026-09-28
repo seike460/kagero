@@ -51,6 +51,12 @@ Rendered by `crates/kagero-agent::collector::render_template`. Leftover
 | `{{KAGERO_RESOURCE_ATTRS}}` | OTel `resource` actions for logs/traces (full identity incl. ids) |
 | `{{KAGERO_METRIC_ATTRS}}` | same list, registry-allowed subset only (ADR-008) |
 
+Endpoint values (`KAGERO_OTLP_ENDPOINT*`, `KAGERO_ENDPOINT_CW_*`) are
+substituted verbatim into double-quoted YAML/river strings and into env
+files that a shell sources. The agent therefore refuses to start when
+one is not printable ASCII or contains `"`, `\`, `$` or a backtick —
+percent-encode such characters in the URL.
+
 ### Secret expansion safety
 
 `{{KAGERO_SECRET:...}}` and `{{KAGERO_SECRET}}` are expanded **only on the

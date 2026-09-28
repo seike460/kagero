@@ -12,26 +12,38 @@ pub struct Identity {
     pub session_id: Option<String>,
 }
 
+/// RFC 6901 syntax: empty (the whole document), or '/'-prefixed with
+/// every '~' followed by '0' or '1'. A non-empty pointer without the
+/// leading '/' is a config error, not a relative lookup, and other '~'
+/// escapes are malformed input, not a literal key.
+pub fn pointer_is_valid(pointer: &str) -> bool {
+    if pointer.is_empty() {
+        return true;
+    }
+    if !pointer.starts_with('/') {
+        return false;
+    }
+    let mut chars = pointer.chars();
+    while let Some(c) = chars.next() {
+        if c == '~' && !matches!(chars.next(), Some('0') | Some('1')) {
+            return false;
+        }
+    }
+    true
+}
+
 /// RFC 6901 JSON Pointer lookup returning a scalar as String.
 pub fn json_pointer(doc: &Value, pointer: &str) -> Option<String> {
-    if pointer.is_empty() {
-        return scalar(doc);
+    if !pointer_is_valid(pointer) {
+        return None;
     }
-    // RFC 6901: a non-empty pointer must start with '/' — anything else
-    // is a config error, not a relative lookup.
-    let rest = pointer.strip_prefix('/')?;
+    let Some(rest) = pointer.strip_prefix('/') else {
+        return scalar(doc);
+    };
     let mut cur = doc;
     // Only the leading '/' is structural — later empty segments are the
     // real "" key (RFC 6901: "/" dereferences key "", "//k" is doc[""]["k"]).
     for raw in rest.split('/') {
-        // '~' must be followed by '0' or '1' — other escapes are
-        // malformed input, not a literal key.
-        let mut chars = raw.chars();
-        while let Some(c) = chars.next() {
-            if c == '~' && !matches!(chars.next(), Some('0') | Some('1')) {
-                return None;
-            }
-        }
         // Decode order matters: ~1 → '/' first, then ~0 → '~', so the
         // valid RFC sequence "~01" yields the key "~1".
         let token = raw.replace("~1", "/").replace("~0", "~");
@@ -184,6 +196,16 @@ mod tests {
         assert_eq!(json_pointer(&doc2, "/"), Some("empty-key".into()));
         // A "" key that is an object still resolves to no scalar.
         assert_eq!(json_pointer(&doc, "/"), None);
+    }
+
+    #[test]
+    fn pointer_syntax() {
+        for ok in ["", "/", "/tenant/id", "//k", "/a~1b/~0key", "/~01"] {
+            assert!(pointer_is_valid(ok), "{ok:?} is a valid pointer");
+        }
+        for bad in ["tenant/id", "tenant", "/a~2b", "/a~", "/~/x", "~0"] {
+            assert!(!pointer_is_valid(bad), "{bad:?} is not a valid pointer");
+        }
     }
 
     #[test]

@@ -51,6 +51,12 @@ exporter を 3 つに分ける必要があります。その版はまだ同梱�
 | `{{KAGERO_RESOURCE_ATTRS}}` | ログ/trace 用の OTel `resource` アクション（ID を含む全識別属性） |
 | `{{KAGERO_METRIC_ATTRS}}` | 同じリストの、レジストリ許可版（ADR-008） |
 
+エンドポイントの値（`KAGERO_OTLP_ENDPOINT*`・`KAGERO_ENDPOINT_CW_*`）は、
+二重引用符で囲んだ YAML・river の文字列と、シェルが source する env
+ファイルへそのまま差し込みます。そのため、表示可能な ASCII でない値や、
+`"`・`\`・`$`・バッククォートを含む値では、エージェントは起動しません。
+これらの文字は URL の中でパーセントエンコードしてください。
+
 ### 秘密展開の安全性
 
 `{{KAGERO_SECRET:...}}` と `{{KAGERO_SECRET}}` は **pristine なテンプレートに

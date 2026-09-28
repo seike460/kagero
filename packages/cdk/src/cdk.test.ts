@@ -129,6 +129,34 @@ describe("kageroEnvironment", () => {
     ).toThrow(/control character/);
   });
 
+  it("rejects endpoint characters the agent refuses at boot", () => {
+    for (const bad of ["http://a$(id)", "http://a`id`", 'http://a"b', "http://a\\b", "http://ｍ"]) {
+      expect(() => kageroEnvironment({ ...baseKagero(), otlpEndpointCloudwatch: bad })).toThrow(
+        /printable ASCII/,
+      );
+    }
+    const env = kageroEnvironment({
+      ...baseKagero(),
+      otlpEndpointLgtm: "https://user@host:4318/v1%20x?x=1&y=2",
+    });
+    expect(env.KAGERO_OTLP_ENDPOINT_LGTM).toBe("https://user@host:4318/v1%20x?x=1&y=2");
+  });
+
+  it("rejects JSON Pointers the agent refuses at boot", () => {
+    for (const bad of ["tenant/id", "/a~2b", "/a~"]) {
+      expect(() => kageroEnvironment({ ...baseKagero(), tenantJsonPointer: bad })).toThrow(
+        /RFC 6901/,
+      );
+    }
+    const env = kageroEnvironment({
+      ...baseKagero(),
+      tenantJsonPointer: "/tenant/id",
+      sessionJsonPointer: "/a~1b/~0c",
+    });
+    expect(env.KAGERO_TENANT_JSON_POINTER).toBe("/tenant/id");
+    expect(env.KAGERO_SESSION_JSON_POINTER).toBe("/a~1b/~0c");
+  });
+
   it("rejects any KAGERO_* key in extraEnvironment", () => {
     expect(() =>
       kageroEnvironment({ ...baseKagero(), extraEnvironment: { KAGERO_APP_UID: "0" } }),
@@ -208,6 +236,10 @@ describe("KageroMicrovmImage", () => {
       ["imageHookTimeoutSeconds", 301],
       ["baselineGib", 0],
       ["hookPort", 70000],
+      ["hookPort", 2019],
+      ["hookPort", 2020],
+      ["hookPort", 4317],
+      ["hookPort", 4318],
     ] as const) {
       expect(
         () =>
