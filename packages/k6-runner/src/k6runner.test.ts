@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { postRunAnnotation } from "./annotations.js";
 import { baseMetricName, EmfEncoder, k6JsonToEmf } from "./emf.js";
-import { outputFromEnv } from "./index.js";
+import { handlerFromEnv, outputFromEnv, type ShardEvent } from "./index.js";
 import { k6Args, k6OtelEnv, type RunShardInput, runShard } from "./runner.js";
 import { waitForStart } from "./schedule.js";
 import { planShards, shardSpec } from "./shard.js";
@@ -460,6 +460,25 @@ describe("runShard", () => {
     expect(r.exitCode).toBe(99);
   });
 
+  it("keeps the k6 result when the annotation POST fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const r = await runShard(
+        { ...BASE_INPUT, grafana: { endpoint: "https://g.example.com", token: "t" } },
+        {
+          clock: { now: () => 5000, sleep: async () => {} },
+          spawn: async () => ({ code: 0, stdout: "", stderr: "" }),
+          fetchImpl: async () => {
+            throw new Error("getaddrinfo ENOTFOUND");
+          },
+        },
+      );
+      expect(r.exitCode).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("posts a region annotation when grafana is configured", async () => {
     const posts: { url: string; body: { time: number; timeEnd: number; tags: string[] } }[] = [];
     await runShard(
@@ -536,6 +555,27 @@ describe("postRunAnnotation", () => {
     }
   });
 
+  it("warns and resolves when Grafana answers with an error status", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(
+      postRunAnnotation({ endpoint: "https://g.example.com", token: "t" }, RUN, async () => ({
+        ok: false,
+        status: 503,
+      })),
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith("grafana annotation POST failed: HTTP 503");
+  });
+
+  it("warns and resolves when the request itself fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(
+      postRunAnnotation({ endpoint: "https://g.example.com", token: "t" }, RUN, async () => {
+        throw new Error("connect ECONNREFUSED");
+      }),
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith("grafana annotation POST failed: connect ECONNREFUSED");
+  });
+
   it("bounds the POST with a timeout signal by default", async () => {
     let signal: AbortSignal | undefined;
     await postRunAnnotation(
@@ -548,5 +588,71 @@ describe("postRunAnnotation", () => {
     );
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(signal?.aborted).toBe(false);
+  });
+});
+
+describe("handlerFromEnv", () => {
+  // `true` stands in for k6, so the real spawn and fetch paths run.
+  const EVENT: ShardEvent = {
+    scriptPath: "/opt/k6/test.js",
+    runId: "run-9",
+    shardIndex: 0,
+    shardCount: 2,
+    startAtMs: 0,
+    backend: "collector",
+    k6Bin: "true",
+  };
+
+  it("posts one annotation per run, from shard 0 only", async () => {
+    const posts: { auth?: string; tags: string[] }[] = [];
+    const grafana = await listen((req, res) => {
+      let body = "";
+      req.on("data", (d: Buffer) => {
+        body += d.toString();
+      });
+      req.on("end", () => {
+        const { tags } = JSON.parse(body) as { tags: string[] };
+        posts.push({ auth: req.headers.authorization, tags });
+        res.end("{}");
+      });
+    });
+    try {
+      const handler = handlerFromEnv({
+        KAGERO_GRAFANA_URL: grafana.url,
+        KAGERO_GRAFANA_TOKEN: "t",
+      } as NodeJS.ProcessEnv);
+      const startAtMs = Date.now();
+      // Every item carries annotate — e.g. merged in from shardInput.
+      const results = await Promise.all(
+        [0, 1].map((shardIndex) => handler({ ...EVENT, startAtMs, shardIndex, annotate: true })),
+      );
+      expect(results.map((r) => r.exitCode)).toEqual([0, 0]);
+      expect(posts).toEqual([{ auth: "Bearer t", tags: ["kagero", "k6", "run:run-9"] }]);
+    } finally {
+      await grafana.close();
+    }
+  });
+
+  it("posts nothing without annotate or without a Grafana token", async () => {
+    let posts = 0;
+    const grafana = await listen((_req, res) => {
+      posts++;
+      res.end("{}");
+    });
+    try {
+      const startAtMs = Date.now();
+      await handlerFromEnv({
+        KAGERO_GRAFANA_URL: grafana.url,
+        KAGERO_GRAFANA_TOKEN: "t",
+      } as NodeJS.ProcessEnv)({ ...EVENT, startAtMs });
+      await handlerFromEnv({ KAGERO_GRAFANA_URL: grafana.url } as NodeJS.ProcessEnv)({
+        ...EVENT,
+        startAtMs,
+        annotate: true,
+      });
+      expect(posts).toBe(0);
+    } finally {
+      await grafana.close();
+    }
   });
 });
