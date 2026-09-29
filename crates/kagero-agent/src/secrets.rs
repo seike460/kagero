@@ -48,6 +48,20 @@ struct SecretValueResponse {
 /// production, a map in tests (edition 2024 makes `env::set_var` unsafe).
 type EnvLookup<'a> = &'a (dyn Fn(&str) -> Option<String> + Sync);
 
+/// Drops the URL from a reqwest error. The IMDS and Secrets Manager
+/// endpoints are configurable and may carry credentials (userinfo, or a
+/// token in the path or query), and these errors reach the degraded
+/// event and the logs.
+trait NoUrl<T> {
+    fn no_url(self) -> std::result::Result<T, reqwest::Error>;
+}
+
+impl<T> NoUrl<T> for std::result::Result<T, reqwest::Error> {
+    fn no_url(self) -> std::result::Result<T, reqwest::Error> {
+        self.map_err(reqwest::Error::without_url)
+    }
+}
+
 /// Remaining hook budget for the next outbound request. Sequential
 /// requests (IMDS token → role → credentials → Secrets Manager) share ONE
 /// deadline — giving each its own fresh timeout could exceed the hook
@@ -86,11 +100,14 @@ async fn resolve_credentials(
         .timeout(budget(deadline)?)
         .send()
         .await
+        .no_url()
         .context("imds token")?
         .error_for_status()
+        .no_url()
         .context("imds token status")?
         .text()
-        .await?;
+        .await
+        .no_url()?;
 
     let role = client
         .get(format!(
@@ -99,10 +116,13 @@ async fn resolve_credentials(
         .header("X-aws-ec2-metadata-token", &token)
         .timeout(budget(deadline)?)
         .send()
-        .await?
-        .error_for_status()?
+        .await
+        .no_url()?
+        .error_for_status()
+        .no_url()?
         .text()
-        .await?;
+        .await
+        .no_url()?;
     let role_name = role.lines().next().unwrap_or_default().trim().to_string();
     if role_name.is_empty() {
         bail!("imds returned no role name");
@@ -131,7 +151,15 @@ async fn fetch_container_creds(
     if let Some(auth) = env("AWS_CONTAINER_AUTHORIZATION_TOKEN") {
         req = req.header("Authorization", auth);
     }
-    let c: ImdsCredentials = req.send().await?.error_for_status()?.json().await?;
+    let c: ImdsCredentials = req
+        .send()
+        .await
+        .no_url()?
+        .error_for_status()
+        .no_url()?
+        .json()
+        .await
+        .no_url()?;
     Ok(Credentials {
         access_key_id: c.access_key_id,
         secret_access_key: c.secret_access_key,
@@ -240,7 +268,15 @@ async fn fetch_secret_with(
     }
     req = req.header("authorization", signed);
 
-    let resp: SecretValueResponse = req.send().await?.error_for_status()?.json().await?;
+    let resp: SecretValueResponse = req
+        .send()
+        .await
+        .no_url()?
+        .error_for_status()
+        .no_url()?
+        .json()
+        .await
+        .no_url()?;
     if let Some(s) = resp.secret_string {
         return Ok(s);
     }
@@ -490,6 +526,51 @@ mod tests {
             .map(|s| s.path.clone())
             .collect();
         assert_eq!(paths, ["/creds-rel", "/"]);
+    }
+
+    #[tokio::test]
+    async fn errors_carry_no_endpoint_credentials() {
+        // Port 1 refuses: the IMDS request fails with a real reqwest error.
+        let imds = "http://user:pw-imds@127.0.0.1:1/p/imds-path-tok?q=imds-query-tok";
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let err = fetch_secret_with(
+            imds,
+            None,
+            "us-east-1",
+            "arn:aws:secretsmanager:us-east-1:123456789012:secret:x-AbCdEf",
+            deadline,
+            &|_| None,
+        )
+        .await
+        .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("imds token"), "{text}");
+        for secret in ["pw-imds", "imds-path-tok", "imds-query-tok"] {
+            assert!(!text.contains(secret), "{secret} leaked: {text}");
+        }
+
+        // Credentials resolve; the Secrets Manager call itself fails.
+        let (base, _) = mock_aws(json!({"SecretString": "s3cr3t"})).await;
+        let env = [(
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+            format!("{base}/creds-full"),
+        )];
+        let lookup = |k: &str| env.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone());
+        let sm = "http://user:pw-sm@127.0.0.1:1/sm-path-tok?q=sm-query-tok";
+        let err = fetch_secret_with(
+            &base,
+            Some(sm),
+            "us-east-1",
+            "arn:aws:secretsmanager:us-east-1:123456789012:secret:x-AbCdEf",
+            deadline,
+            &lookup,
+        )
+        .await
+        .unwrap_err();
+        let text = format!("{err:#}");
+        for secret in ["pw-sm", "sm-path-tok", "sm-query-tok"] {
+            assert!(!text.contains(secret), "{secret} leaked: {text}");
+        }
     }
 
     #[tokio::test]

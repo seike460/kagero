@@ -405,7 +405,9 @@ impl Collector {
             match resp {
                 Ok(r) if r.status().is_success() => return Ok(()),
                 Ok(r) => warn!(status = %r.status(), "collector reload endpoint failed"),
-                Err(e) => warn!(?e, "collector reload endpoint unreachable"),
+                // The reload URL is configurable and may carry a token;
+                // keep it out of the log.
+                Err(e) => warn!(error = ?e.without_url(), "collector reload endpoint unreachable"),
             }
         }
         // The HTTP attempt already consumed part of the budget — the
@@ -1156,6 +1158,50 @@ mod tests {
     /// A restart must not clear the flag the OLD child's exit watcher
     /// reads — otherwise every deliberate restart (e.g. /resume without a
     /// reload URL) logs "child exited on its own".
+    #[tokio::test]
+    async fn failed_reload_logs_no_reload_url_secret() {
+        #[derive(Clone, Default)]
+        struct Capture(std::sync::Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+            type Writer = Capture;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+        let logs = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let mut cfg = config::fixture();
+        // Port 1 refuses: the reload POST fails with a real reqwest error.
+        cfg.collector_reload_url = Some("http://127.0.0.1:1/reload/path-tok?q=query-tok".into());
+        cfg.collector_bin = None; // the restart fallback then fails; only the log matters here
+        let c = Collector::new(crate::process::Reaper::idle());
+        let _ = c.reload(&cfg, std::time::Duration::from_secs(2)).await;
+
+        let text = String::from_utf8_lossy(&logs.0.lock().unwrap()).into_owned();
+        assert!(
+            text.contains("collector reload endpoint unreachable"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("path-tok") && !text.contains("query-tok"),
+            "{text}"
+        );
+    }
+
     #[tokio::test]
     async fn restart_keeps_the_old_childs_stop_flag() {
         use std::sync::atomic::Ordering;
