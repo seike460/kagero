@@ -114,6 +114,9 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Dashboards**: the dashboard description no longer mentions traces
   or suspend/resume latency. The agent emits no spans, and the suspend
   panel shows how long MicroVMs stayed suspended.
+- **Pricing**: the MicroVM prices now apply from 2026-06-22, the day
+  MicroVMs launched. They applied from 2026-06-09, so an `asOf` before
+  the launch still got a MicroVM price.
 - **Docs**: the k6 runner (`outputFromEnv`) and `KageroK6Run` now list
   the worker env and its values. There, `KAGERO_OTLP_ENDPOINT` is
   `host:port` with no scheme and `KAGERO_OTLP_HEADERS` is

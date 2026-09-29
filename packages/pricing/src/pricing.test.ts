@@ -91,8 +91,14 @@ describe("findPrice", () => {
   });
 
   it("effectiveFrom boundary is inclusive", () => {
-    const e = findPrice("microvm", "us-east-1", "arm64", new Date("2026-06-09"));
+    const e = findPrice("microvm", "us-east-1", "arm64", new Date("2026-06-22"));
     expect(e?.prices.memoryGbSecond).toBe(0.0000036667);
+  });
+
+  it("prices no microvm before the 2026-06-22 launch", () => {
+    for (const region of ["us-east-1", "ap-northeast-1"]) {
+      expect(findPrice("microvm", region, "arm64", new Date("2026-06-21T23:59:59Z"))).toBeNull();
+    }
   });
 
   it("exact region beats wildcard", () => {
