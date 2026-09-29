@@ -31,10 +31,10 @@ export interface PriceTable {
 const SERVICES: Service[] = ["microvm", "lambda", "managed-instances", "durable"];
 
 /**
- * Structural validation for the hand-curated JSON — the `as unknown as`
- * cast above trusts nothing, so check the parts every estimate relies
- * on: shape, service names, parseable dates, finite numeric prices, and
- * no duplicate (service, region, arch, effectiveFrom) keys.
+ * Structural validation for the hand-curated JSON — `PRICE_TABLE` takes
+ * its type from this assertion alone, so check the parts every estimate
+ * relies on: shape, service names, parseable dates, finite numeric
+ * prices, and no duplicate (service, region, arch, effectiveFrom) keys.
  * Throws on the first defect — a bad table must fail LOUD at import,
  * not quietly misprice.
  */
@@ -79,7 +79,7 @@ export function validatePriceTable(t: unknown): asserts t is PriceTable {
 
 export const PRICE_TABLE: PriceTable = (() => {
   validatePriceTable(table);
-  return table as unknown as PriceTable;
+  return table;
 })();
 export const PRICE_TABLE_VERSION = PRICE_TABLE.version;
 
