@@ -78,6 +78,20 @@ source されます。秘密の値に `{{KAGERO_` という文字列が含まれ
 秘密を使ってください。CloudWatch 側は秘密を使いません。収集器の `sigv4auth` が
 実行ロールで署名します（ADR-011）。
 
+## CloudWatch の前提
+
+CloudWatch のテンプレート（`cloudwatch/collector.yaml.tmpl` と
+`rotel/cloudwatch.env.tmpl`）は、kagero が作らず、権限も付けない AWS の
+リソースを使います。最初の `/run` より前に用意してください。用意がないと、
+AWS は送信を拒みます。
+
+- **ロググループとログストリーム。** CloudWatch Logs の OTLP エンドポイントは、
+  既にあるロググループとログストリームにだけ書き込みます。ロググループ
+  `/kagero/<image-name>`（`KAGERO_MICROVM_IMAGE_NAME`）と、その中のログストリーム
+  `otlp` を作ります。同じイメージの MicroVM は、すべてこのストリームに書きます。
+  OTel Collector のテンプレートは、resource 属性で MicroVM を見分けます。
+  Rotel のテンプレートは見分けません（下の「未確認」を参照）。
+
 ## 識別属性のフィルタ（ADR-008）
 
 ID はレコード単位ではなく **resource** 単位で刻印します（`resource`
@@ -122,7 +136,6 @@ Prometheus 系の取り込みでラベルになるのは resource 属性だか�
   絞り込みはありません。ADR-008 を守るため、同梱の Rotel テンプレートは
   メトリクス安全な属性だけを付けます — **Rotel 経路では
   インスタンス・テナント・セッション ID を一切付けません**。そのため
-  Rotel では MicroVM ごとのログ・トレース掘り下げができません
-  （MicroVM ID は CloudWatch のログストリーム名には乗ります）。
+  Rotel では MicroVM ごとのログ・トレース掘り下げができません。
   完全な識別には OTel Collector か Alloy のテンプレートを使います。
   Rotel の信号別サポートを広げる前に PoC-04 で再確認します。

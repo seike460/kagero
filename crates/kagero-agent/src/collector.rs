@@ -1090,6 +1090,50 @@ mod tests {
         }
     }
 
+    /// The CloudWatch Logs OTLP endpoint writes only to a log group and
+    /// stream that already exist. A name built from a value that `/run`
+    /// delivers could not be created in advance, so every export would
+    /// be rejected.
+    #[test]
+    fn cloudwatch_log_destination_is_known_before_run() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        for rel in [
+            "collector/cloudwatch/collector.yaml.tmpl",
+            "collector/rotel/cloudwatch.env.tmpl",
+        ] {
+            let tpl = std::fs::read_to_string(root.join(rel))
+                .unwrap_or_else(|e| panic!("read {rel}: {e}"));
+            let headers: Vec<&str> = tpl
+                .lines()
+                .filter(|l| !l.trim_start().starts_with('#') && l.contains("x-aws-log-"))
+                .collect();
+            for name in ["x-aws-log-group", "x-aws-log-stream"] {
+                assert!(
+                    headers.iter().any(|l| l.contains(name)),
+                    "{rel}: no {name} header"
+                );
+            }
+            for line in headers {
+                for mark in [
+                    "{{KAGERO_MICROVM_ID}}",
+                    "{{KAGERO_TENANT_ID}}",
+                    "{{KAGERO_SESSION_ID}}",
+                    "{{KAGERO_SECRET",
+                ] {
+                    assert!(
+                        !line.contains(mark),
+                        "{rel}: the log destination uses {mark}, known only at /run: {line}"
+                    );
+                }
+            }
+        }
+    }
+
     /// A template referencing an endpoint whose env var is unset must
     /// keep its placeholder — configure_and_ensure_running then fails
     /// closed instead of writing `endpoint: ""` (silent export void).

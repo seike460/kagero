@@ -116,6 +116,15 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Dashboards**: the dashboard description no longer mentions traces
   or suspend/resume latency. The agent emits no spans, and the suspend
   panel shows how long MicroVMs stayed suspended.
+- **Collector**: the CloudWatch templates (OTel Collector and Rotel) now
+  send logs to the log stream `otlp` in the log group
+  `/kagero/<image-name>`. The CloudWatch Logs OTLP endpoint writes only
+  to a log group and stream that already exist (AWS documentation). The
+  stream was named after the MicroVM id, which is known only at `/run`,
+  so it could not be created in advance and every log export would be
+  rejected. Create the group and the stream before the first `/run`,
+  as `collector/README.md` now describes. On the Rotel path, logs no
+  longer carry the MicroVM id.
 - **Pricing**: the MicroVM prices now apply from 2026-06-22, the day
   MicroVMs launched. They applied from 2026-06-09, so an `asOf` before
   the launch still got a MicroVM price.

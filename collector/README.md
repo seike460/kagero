@@ -80,6 +80,20 @@ secrets without that substring. CloudWatch needs no secret — the
 collector's `sigv4auth` extension signs with the execution role
 (ADR-011).
 
+## CloudWatch prerequisites
+
+The CloudWatch templates (`cloudwatch/collector.yaml.tmpl` and
+`rotel/cloudwatch.env.tmpl`) rely on AWS resources that kagero neither
+creates nor grants. Set them up before the first `/run`; without them,
+AWS rejects the exports.
+
+- **Log group and log stream.** The CloudWatch Logs OTLP endpoint writes
+  only to a log group and log stream that already exist. Create the log
+  group `/kagero/<image-name>` (`KAGERO_MICROVM_IMAGE_NAME`) and the log
+  stream `otlp` in it. Every MicroVM of the image writes to that one
+  stream. The OTel Collector template tells them apart by resource
+  attributes; the Rotel template does not (see Unverified below).
+
 ## Identity filtering (ADR-008)
 
 Ids are stamped at **resource** level (`resource` processor /
@@ -127,7 +141,6 @@ because the rendered config needs the secret that `/run` fetches.
   per-signal scoping. To stay ADR-008-safe the shipped Rotel templates
   stamp only metric-safe attributes — **instance/tenant/session ids are
   not attached at all on the Rotel path**, so per-VM drilldown of
-  logs/traces is unavailable there (the MicroVM id still lands on the
-  CloudWatch log-stream name). Full identity requires the OTel Collector
+  logs/traces is unavailable there. Full identity requires the OTel Collector
   or Alloy templates. Re-verify Rotel's per-signal support in PoC-04
   before extending this.

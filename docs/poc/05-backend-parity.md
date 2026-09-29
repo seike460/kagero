@@ -29,6 +29,7 @@
 7. 同じパネルの定義を、両方のデータソースで表示できるかを確かめます。
 8. ダッシュボードを 1 回更新したときに課金されるサンプル数を記録し、GetMetricData の場合と比べます。
 9. delta temporality のメトリクスを、それぞれの送り先が変換なしで受け付けるかを記録します。受け付けない送り先では、変換の方法（Prometheus の `otlp-deltatocumulative` フラグ、collector の `deltatocumulative` processor）を試します。durable-stitcher のメトリクスは delta です。
+10. kagero の CloudWatch テンプレートの設定で、ログを CloudWatch Logs の OTLP エンドポイントに送ります。ロググループ `/kagero/<image-name>` とログストリーム `otlp` が無いときは拒まれ、前もって作れば受け付けることを確かめます。複数の MicroVM が同じストリームに書けることと、実行ロールに要る最小の権限も記録します。
 
 ## 合格条件
 

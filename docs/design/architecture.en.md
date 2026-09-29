@@ -117,7 +117,7 @@ Points where behavior may differ (verified in [PoC-05 (Japanese)](../poc/05-back
 - Limits: CloudWatch PromQL is capped at 500 series per query and a 7-day range.
 - Histogram types and delta/cumulative temporality may be handled differently.
 - Cost: CloudWatch PromQL charges per sample scanned by API queries; Logs Insights charges per volume scanned.
-- Unverified: whether OTLP sends to CloudWatch Logs require a way to specify the log group (e.g., headers).
+- OTLP sends to CloudWatch Logs name the log group and log stream in the `x-aws-log-group` and `x-aws-log-stream` headers, and both must exist beforehand (per the AWS docs; not yet verified on real AWS).
 
 ## 6. Attributes and cardinality
 

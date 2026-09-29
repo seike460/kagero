@@ -115,7 +115,7 @@ kagero/
 - 上限: CloudWatch PromQL は、1 クエリ 500 系列、期間 7 日が上限です。
 - ヒストグラムの種類と、delta / cumulative の扱いが違う可能性があります。
 - 費用: CloudWatch PromQL は、API 経由の問い合わせで走査したサンプル数に課金されます。Logs Insights は走査した量に課金されます。
-- CloudWatch Logs への OTLP 送信で、ロググループの指定方法（ヘッダーなど）が必要か、未確認です。
+- CloudWatch Logs への OTLP 送信では、ロググループとログストリームを `x-aws-log-group` と `x-aws-log-stream` のヘッダーで指定します。どちらも前もって作っておく必要があります（AWS の文書によります。実機では未確認です）。
 
 ## 6. 属性とカーディナリティ
 
