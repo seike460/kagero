@@ -22,7 +22,7 @@
             "severity": "warning"
           },
           "annotations": {
-            "summary": "no MicroVM telemetry reaching the backend while the fleet should be active"
+            "summary": "no MicroVM telemetry for 10m — also fires when no MicroVM is RUNNING (all suspended or terminated), so use it on fleets that should always be active"
           }
         },
         {

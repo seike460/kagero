@@ -108,6 +108,9 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   relay failures. Only kagero's own steps (a secret fetch, the
   collector, an OTLP export, and so on) raise a degraded event. App relay
   failures and timeouts are counted by `kagero.microvm.hook_results`.
+- **Dashboards**: the `KageroNoMicrovmTelemetry` alert now says that it
+  also fires when no MicroVM is RUNNING, for example when the whole
+  fleet is suspended. It fits fleets that should always be active.
 - **Docs**: the k6 runner (`outputFromEnv`) and `KageroK6Run` now list
   the worker env and its values. There, `KAGERO_OTLP_ENDPOINT` is
   `host:port` with no scheme and `KAGERO_OTLP_HEADERS` is

@@ -17,7 +17,7 @@
       "expr": "absent_over_time(kagero_microvm_running_seconds_total[10m])",
       "forSeconds": 600,
       "severity": "warning",
-      "summary": "no MicroVM telemetry reaching the backend while the fleet should be active",
+      "summary": "no MicroVM telemetry for 10m — also fires when no MicroVM is RUNNING (all suspended or terminated), so use it on fleets that should always be active",
       "supported": false,
       "unsupportedReason": "CloudWatch alarms do not evaluate PromQL — provision via CDK (v0.5)."
     },
