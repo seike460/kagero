@@ -119,7 +119,8 @@ describe("handlerFromEnv", () => {
   it("sends KAGERO_OTLP_HEADER to the LGTM target only on backend=both", async () => {
     const handler = handlerFromEnv({
       KAGERO_BACKEND: "both",
-      KAGERO_OTLP_ENDPOINT_LGTM: `${base}/lgtm`,
+      // A trailing slash is dropped before /v1/<signal>.
+      KAGERO_OTLP_ENDPOINT_LGTM: `${base}/lgtm/`,
       KAGERO_OTLP_ENDPOINT_CLOUDWATCH: `${base}/cw`,
       KAGERO_OTLP_HEADER: "Authorization: Basic dXNlcjpwYXNz",
       AWS_REGION: "us-east-1",
@@ -147,11 +148,11 @@ describe("handlerFromEnv", () => {
     }
   });
 
-  it("keeps the endpoint's path and query out of the export error", async () => {
-    // A query is not a supported endpoint shape (it would precede
-    // /v1/<signal>), but a value that has one must not leak either.
+  it("keeps the endpoint's path out of the export error", async () => {
+    // A query is refused at init (it would precede /v1/<signal>), so a
+    // token can only reach the export in the path.
     const handler = handlerFromEnv({
-      KAGERO_OTLP_ENDPOINT: `${base}/deny/path-tok?q=query-tok`,
+      KAGERO_OTLP_ENDPOINT: `${base}/deny/path-tok`,
       AWS_REGION: "us-east-1",
     });
     const err = await handler({
@@ -163,7 +164,7 @@ describe("handlerFromEnv", () => {
       (e: unknown) => e,
     );
     const msg = String(err);
-    for (const t of ["path-tok", "query-tok", "Cannot POST"]) {
+    for (const t of ["path-tok", "Cannot POST"]) {
       expect(msg, `${t} leaked`).not.toContain(t);
     }
     expect(msg).toContain(

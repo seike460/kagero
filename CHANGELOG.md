@@ -37,6 +37,20 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   entry at boot.
 - **CDK**: the default dead-letter queue of `KageroDurableStitcher` now
   denies requests that do not use TLS (`enforceSSL`).
+- **Durable stitcher**: the handler now checks its OTLP endpoints at
+  init: `KAGERO_OTLP_ENDPOINT`, `KAGERO_OTLP_ENDPOINT_LGTM`,
+  `KAGERO_OTLP_ENDPOINT_CLOUDWATCH` and its `_TRACES` / `_METRICS` /
+  `_LOGS` overrides, and the CloudWatch endpoints it derives from the
+  region. Each must be an absolute `http://` or `https://` URL with a
+  host and no query, fragment, userinfo or whitespace. A prefix path and
+  a trailing slash are fine. The stitcher appends `/v1/traces` or
+  `/v1/metrics` to the value, so a query or fragment sent every export
+  to the wrong path, and fetch refused userinfo. Each notification then
+  failed its retries and ended in the dead-letter queue. The error names
+  the setting but not its value.
+- **CDK**: `KageroDurableStitcher` applies the same check to its
+  endpoint props at synth time. The error names the prop but not its
+  value. An unresolved token is checked by the handler at init instead.
 - **Agent**: the hook port and the admin port are bound before the app
   starts, so the app can no longer take either one first. A failed admin
   bind or accept is now logged instead of dropped silently.

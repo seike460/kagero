@@ -413,6 +413,48 @@ describe("KageroMicrovmImage", () => {
   });
 });
 
+/** Base-URL shapes the stitcher refuses at init.
+ *  Tokens sit in the userinfo, the path, the query and the fragment. */
+const REJECTED_BASE_URLS = [
+  "https://h.example.com/path-tok?q=query-tok",
+  "https://h.example.com/path-tok?",
+  "https://h.example.com/path-tok#frag-tok",
+  "https://user:pw-tok@h.example.com/path-tok",
+  "https://@h.example.com/path-tok",
+  "h.example.com:4318/path-tok",
+  "ftp://h.example.com/path-tok",
+  "https:///path-tok",
+  "https:h.example.com/path-tok",
+  "https://h.example.com/path-tok ",
+  "https://h.example.com/path-tok\n",
+  "https://h.example.com:99999/path-tok",
+];
+const ACCEPTED_BASE_URLS = [
+  "https://h.example.com",
+  "https://h.example.com/",
+  "http://127.0.0.1:4318",
+  "https://h.example.com/prefix",
+  "https://h.example.com/prefix/",
+];
+
+/** The synth error of `f`, checked to carry none of the value's tokens. */
+function synthError(f: () => unknown): string {
+  let msg = "";
+  try {
+    f();
+  } catch (e) {
+    msg = String(e);
+  }
+  for (const t of ["pw-tok", "path-tok", "query-tok", "frag-tok"]) {
+    expect(msg, `${t} leaked`).not.toContain(t);
+  }
+  return msg;
+}
+
+const BASE_URL_RULE =
+  "must be an absolute http:// or https:// URL with a host, and no query, " +
+  "fragment, userinfo or whitespace";
+
 describe("KageroDurableStitcher", () => {
   it("creates fn + status rule + DLQ + history permission", () => {
     const { stack } = makeStack();
@@ -598,6 +640,53 @@ describe("KageroDurableStitcher", () => {
           KAGERO_OTLP_SIGV4_SERVICE_METRICS: "monitoring",
         }),
       },
+    });
+  });
+
+  describe("checks every endpoint prop at synth, as the handler does at init", () => {
+    const PROPS = [
+      "otlpEndpoint",
+      "otlpEndpointLgtm",
+      "otlpEndpointCloudwatch",
+      "otlpEndpointCloudwatchTraces",
+      "otlpEndpointCloudwatchMetrics",
+      "otlpEndpointCloudwatchLogs",
+    ] as const;
+
+    it("names the prop but not the value", () => {
+      for (const prop of PROPS) {
+        for (const value of REJECTED_BASE_URLS) {
+          const { stack } = makeStack();
+          const msg = synthError(
+            () =>
+              new KageroDurableStitcher(stack, "Stitch", {
+                entry: FIXTURE_ENTRY,
+                backend: "both",
+                otlpEndpointLgtm: "https://lgtm.example.com",
+                [prop]: value,
+              }),
+          );
+          expect(msg, `${prop}=${JSON.stringify(value)}`).toBe(
+            `Error: KageroDurableStitcher ${prop} ${BASE_URL_RULE}`,
+          );
+        }
+      }
+    });
+
+    it("accepts a base URL with or without a prefix path, and tokens", () => {
+      const { stack } = makeStack();
+      const token = new CfnParameter(stack, "Endpoint").valueAsString;
+      let n = 0;
+      for (const prop of PROPS) {
+        for (const value of [...ACCEPTED_BASE_URLS, token]) {
+          new KageroDurableStitcher(stack, `Stitch${n++}`, {
+            entry: FIXTURE_ENTRY,
+            backend: "both",
+            otlpEndpointLgtm: "https://lgtm.example.com",
+            [prop]: value,
+          });
+        }
+      }
     });
   });
 });

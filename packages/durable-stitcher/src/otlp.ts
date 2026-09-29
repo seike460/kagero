@@ -24,6 +24,7 @@ export interface OtlpTarget {
    * "/v1/traces" or "/v1/metrics" is appended as text, so the URL takes
    * no query or fragment (it would precede the signal path) and no
    * userinfo (fetch refuses it; credentials go in `headers`).
+   * handlerFromEnv refuses any other shape at init.
    */
   endpoint: string;
   /**

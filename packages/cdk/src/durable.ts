@@ -25,6 +25,7 @@ import {
   aws_events_targets as targets,
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
+import { checkBaseUrl } from "./base-url.js";
 import { grantSecretRead } from "./secrets.js";
 
 const require_ = createRequire(import.meta.url);
@@ -40,7 +41,8 @@ export interface KageroDurableStitcherProps {
    * Every endpoint prop is a base URL: the stitcher appends /v1/traces
    * and /v1/metrics, so it may carry a prefix path but no query,
    * fragment or userinfo (`OtlpTarget.endpoint` in
-   * packages/durable-stitcher).
+   * packages/durable-stitcher). Any other shape fails synth; an
+   * unresolved CDK token is checked by the handler at init instead.
    */
   otlpEndpoint?: string;
   /**
@@ -111,6 +113,17 @@ export class KageroDurableStitcher extends Construct {
       // cloudwatch may derive every signal endpoint from the function's
       // region (AWS_REGION is always set on Lambda); lgtm cannot.
       throw new Error("KageroDurableStitcher requires otlpEndpoint for the lgtm backend");
+    }
+    // The handler refuses these at init; fail synth instead.
+    for (const [label, v] of [
+      ["otlpEndpoint", props.otlpEndpoint],
+      ["otlpEndpointLgtm", props.otlpEndpointLgtm],
+      ["otlpEndpointCloudwatch", props.otlpEndpointCloudwatch],
+      ["otlpEndpointCloudwatchTraces", props.otlpEndpointCloudwatchTraces],
+      ["otlpEndpointCloudwatchMetrics", props.otlpEndpointCloudwatchMetrics],
+      ["otlpEndpointCloudwatchLogs", props.otlpEndpointCloudwatchLogs],
+    ] as const) {
+      if (v) checkBaseUrl(`KageroDurableStitcher ${label}`, v);
     }
 
     this.deadLetterQueue =
