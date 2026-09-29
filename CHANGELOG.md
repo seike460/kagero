@@ -99,6 +99,10 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   returns its result only after this POST, so a Grafana that stopped
   answering held the shard for up to 300 seconds (the fetch default) and
   could push it past the Lambda timeout.
+- **Dashboards**: the CloudWatch dashboard's `KAGERO_PLATFORM_LOG_GROUP`
+  variable now defaults to `/aws/lambda-microvms/<image-name>`, the log
+  group where MicroVMs write stdout by default. It showed the Lambda
+  function form `/aws/lambda/<function-name>`.
 - **Docs**: the k6 runner (`outputFromEnv`) and `KageroK6Run` now list
   the worker env and its values. There, `KAGERO_OTLP_ENDPOINT` is
   `host:port` with no scheme and `KAGERO_OTLP_HEADERS` is

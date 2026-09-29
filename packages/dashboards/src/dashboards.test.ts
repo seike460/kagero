@@ -160,6 +160,16 @@ describe("buildDashboard", () => {
     // v1: collapsed row must own its panels or they still render+query.
     expect((cwLogRow as { panels?: unknown[] }).panels?.length).toBe(3);
   });
+
+  it("defaults the cloudwatch log-group variables to the collector and MicroVM groups", () => {
+    const cw = buildDashboard(microvmOverview, adapterFor("cloudwatch")) as {
+      templating?: { list?: { name?: string; query?: unknown }[] };
+    };
+    const vars = new Map((cw.templating?.list ?? []).map((v) => [v.name, v.query]));
+    expect(vars.get("KAGERO_LOG_GROUP")).toBe("/kagero/<image-name>");
+    // AWS default for MicroVM build/runtime stdout — not a function's /aws/lambda/<name>.
+    expect(vars.get("KAGERO_PLATFORM_LOG_GROUP")).toBe("/aws/lambda-microvms/<image-name>");
+  });
 });
 
 describe("buildAlerts", () => {
