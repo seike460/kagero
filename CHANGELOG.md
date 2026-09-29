@@ -7,6 +7,8 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-09-29
+
 ### Added
 
 - **Security policy**: `SECURITY.md` says how to report a vulnerability
@@ -327,5 +329,6 @@ published artifact.
   MicroVM launcher for long runs, and reconciling the cost estimate
   against the AWS Cost and Usage Report (PoC-09).
 
-[Unreleased]: https://github.com/seike460/kagero/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/seike460/kagero/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/seike460/kagero/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/seike460/kagero/releases/tag/v0.1.0
