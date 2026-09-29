@@ -36,6 +36,12 @@ interface Attribute {
   annotations?: { kagero?: KageroAnnotations };
 }
 
+type EnumAttribute = Attribute & { type: { members: EnumMember[] } };
+
+function isEnum(a: Attribute): a is EnumAttribute {
+  return typeof a.type !== "string" && Array.isArray(a.type.members);
+}
+
 interface Group {
   id: string;
   type: string;
@@ -138,7 +144,7 @@ for (const reg of registries) {
   }
 }
 
-const enums = attributes.filter((a) => typeof a.type !== "string" && a.type.members);
+const enums = attributes.filter(isEnum);
 const forbidden = attributes.filter((a) => a.annotations?.kagero?.metric_label === "forbidden");
 
 // ---------- TypeScript ----------
@@ -168,13 +174,11 @@ ts.push("} as const;\n");
 
 ts.push("\n// Enumerated attribute values\n");
 for (const a of enums) {
-  if (typeof a.type !== "string" && a.type.members) {
-    const name = typeName(a.id);
-    const values = a.type.members.map((m) => m.value);
-    ts.push(`/** Values of \`${a.id}\`. */`);
-    ts.push(`export const ${screamingSnake(name)}_VALUES = ${JSON.stringify(values)} as const;`);
-    ts.push(`export type ${name} = (typeof ${screamingSnake(name)}_VALUES)[number];\n`);
-  }
+  const name = typeName(a.id);
+  const values = a.type.members.map((m) => m.value);
+  ts.push(`/** Values of \`${a.id}\`. */`);
+  ts.push(`export const ${screamingSnake(name)}_VALUES = ${JSON.stringify(values)} as const;`);
+  ts.push(`export type ${name} = (typeof ${screamingSnake(name)}_VALUES)[number];\n`);
 }
 
 ts.push("\n// ADR-008: attributes that must never appear on metric labels\n");
@@ -235,33 +239,31 @@ rs.push(
     .join(", ")}];`,
 );
 for (const a of enums) {
-  if (typeof a.type !== "string" && a.type.members) {
-    const name = typeName(a.id);
-    rs.push(`\n/// Values of \`${a.id}\`.`);
-    rs.push("#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]");
-    rs.push(`pub enum ${name} {`);
-    for (const member of a.type.members) {
-      const mb = docText(member.brief);
-      if (mb) rs.push(`    /// ${mb}`);
-      rs.push(`    ${variantName(member.id)},`);
-    }
-    rs.push("}\n");
-    rs.push(`impl ${name} {`);
-    rs.push("    pub const fn as_str(self) -> &'static str {");
-    rs.push("        match self {");
-    for (const member of a.type.members) {
-      rs.push(`            Self::${variantName(member.id)} => ${rustStr(member.value)},`);
-    }
-    rs.push("        }\n    }\n}");
-    rs.push(`\nimpl TryFrom<&str> for ${name} {`);
-    rs.push("    type Error = ();\n");
-    rs.push("    fn try_from(value: &str) -> Result<Self, ()> {");
-    rs.push("        match value {");
-    for (const member of a.type.members) {
-      rs.push(`            ${rustStr(member.value)} => Ok(Self::${variantName(member.id)}),`);
-    }
-    rs.push("            _ => Err(()),\n        }\n    }\n}");
+  const name = typeName(a.id);
+  rs.push(`\n/// Values of \`${a.id}\`.`);
+  rs.push("#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]");
+  rs.push(`pub enum ${name} {`);
+  for (const member of a.type.members) {
+    const mb = docText(member.brief);
+    if (mb) rs.push(`    /// ${mb}`);
+    rs.push(`    ${variantName(member.id)},`);
   }
+  rs.push("}\n");
+  rs.push(`impl ${name} {`);
+  rs.push("    pub const fn as_str(self) -> &'static str {");
+  rs.push("        match self {");
+  for (const member of a.type.members) {
+    rs.push(`            Self::${variantName(member.id)} => ${rustStr(member.value)},`);
+  }
+  rs.push("        }\n    }\n}");
+  rs.push(`\nimpl TryFrom<&str> for ${name} {`);
+  rs.push("    type Error = ();\n");
+  rs.push("    fn try_from(value: &str) -> Result<Self, ()> {");
+  rs.push("        match value {");
+  for (const member of a.type.members) {
+    rs.push(`            ${rustStr(member.value)} => Ok(Self::${variantName(member.id)}),`);
+  }
+  rs.push("            _ => Err(()),\n        }\n    }\n}");
 }
 const genRsPath = join(repoRoot, "crates/kagero-agent/src/semconv_gen.rs");
 writeFileSync(genRsPath, `${rs.join("\n")}\n`);
@@ -282,10 +284,9 @@ const doc: string[] = [
 for (const a of attributes) {
   const t = typeof a.type === "string" ? a.type : "enum";
   const label = a.annotations?.kagero?.metric_label ?? "—";
-  const enumNote =
-    typeof a.type !== "string" && a.type.members
-      ? `（values: ${a.type.members.map((m) => `\`${m.value}\``).join(", ")}）`
-      : "";
+  const enumNote = isEnum(a)
+    ? `（values: ${a.type.members.map((m) => `\`${m.value}\``).join(", ")}）`
+    : "";
   doc.push(
     `| \`${a.id}\` | ${t} | ${a.stability ?? "development"} | ${label} | ${docText(a.brief).replace(/\|/g, "\\|")}${enumNote} |`,
   );
