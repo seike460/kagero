@@ -1,9 +1,9 @@
 # kagero — Lambda MicroVMs design
 
-> English translation of [microvms.md](microvms.md) (Japanese is canonical). Last synced: 2026-09-27.
+> English translation of [microvms.md](microvms.md) (Japanese is canonical). Last synced: 2026-09-29.
 
 - Status: implementation is ahead of this document ([ADR-012](../decisions.en.md)). The details will be finalized based on the results of PoC-01 through PoC-05.
-- Last updated: 2026-09-26
+- Last updated: 2026-09-29
 - Related documents: [Overall design](architecture.en.md) / [ADRs](../decisions.en.md) / [Research chapter 1 (Japanese)](../research/2026-09-landscape.md#1-aws-lambda-microvms)
 
 ## 1. Purpose
@@ -146,7 +146,9 @@ sequenceDiagram
 - At build time (`/ready`, `/validate`), fail toward stopping: if either the app or kagero fails, the build fails.
 - At runtime, fail toward not stopping the workload: even if kagero fails, the app's result is returned. Failures are recorded as `degraded` events.
 - If the app returns 404, the hook is treated as "not implemented" and counted as a success.
-- The same hook for the same MicroVM is processed only once. Hooks are processed one at a time, in order.
+- `ready`, `validate`, `run`, and `terminate` remember their first successful result. When the same hook arrives again, it is not processed again; the remembered result is returned. A hook that failed is processed again the next time it arrives.
+- `suspend` and `resume` arrive on every suspend/resume cycle, so they are processed every time.
+- Hooks are processed one at a time, in order.
 - `runHookPayload` is passed to the app unmodified and is never written to logs.
 
 ### 5-4. Ports
@@ -228,7 +230,7 @@ Outputs:
 - Per-MicroVM and per-tenant cost is computed from the summary logs.
 - Suspend storage cost is computed from the suspend duration and the snapshot size. Whether the snapshot size can be obtained is unconfirmed (PoC-09).
 
-## 10. Distribution and usage (planned)
+## 10. Distribution and usage
 
 `kagero` is distributed as an OCI image. Users pull it in with `COPY --from` in their Dockerfile.
 
@@ -243,7 +245,7 @@ CMD ["/app/start"]
 
 - Non-secret settings (backend type, endpoint, baseline, hook time limit) are passed via image environment variables.
 - Secrets are fetched from Secrets Manager at `/run` ([ADR-011](../decisions.en.md#adr-011-secret-delivery)).
-- The MicrovmImage Hooks are set to kagero's hook port. This will be packaged into a CDK construct in v0.5.
+- The MicrovmImage Hooks are set to kagero's hook port. The CDK construct `KageroMicrovmImage` (`packages/cdk`) sets the hook port, the hook time limits, and kagero's environment variables from one set of values. `packages/cdk` is not published to npm, so use it from this repository (npm publication is planned for v0.5).
 - The image also carries kagero's `/LICENSE` and the license texts of the crates and the Rust standard library built into the binary (`/licenses`). When you distribute your own image, copy them in with `COPY --from` as well.
 
 ## 11. Open questions

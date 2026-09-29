@@ -211,6 +211,12 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   check, with no snapshot test and no LogQL check. The English
   repository tree is translated, and both trees list `docker/` and
   `.github/workflows/`.
+- **Docs**: the MicroVMs design now says which hooks are processed
+  once. `ready`, `validate`, `run` and `terminate` return their first
+  successful result again, a failed one runs again, and `suspend` and
+  `resume` run every time. It said that every hook ran only once. Its
+  distribution section is no longer marked as planned and names
+  `KageroMicrovmImage`.
 
 ## [0.1.0] — 2026-09-28
 
