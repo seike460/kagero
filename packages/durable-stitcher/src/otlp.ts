@@ -44,19 +44,50 @@ export interface Send {
   post(url: string, body: Buffer, headers: Record<string, string>): Promise<void>;
 }
 
-/** Injectable transport — tests inject a mock, production uses fetch. */
+/** Where a POST went, for errors: scheme and host (with port) only.
+ * The endpoint is configurable, and its userinfo, path or query may
+ * carry a token; userinfo shows as `REDACTED@`. */
+function originOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.username || u.password ? "REDACTED@" : ""}${u.host}`;
+  } catch {
+    return "an invalid URL";
+  }
+}
+
+/** Why fetch failed, without its message: some messages quote the whole
+ * URL ("Failed to parse URL from …", "…includes credentials: …"). The
+ * error name and the network error code (ECONNREFUSED, ENOTFOUND…) do
+ * not. */
+function fetchFailure(e: unknown): string {
+  if (!(e instanceof Error)) return "unknown error";
+  const code = (e.cause as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" ? `${e.name} (${code})` : e.name;
+}
+
+/** Injectable transport — tests inject a mock, production uses fetch.
+ * Errors name the scheme and host and the HTTP status (or the kind of
+ * network failure), never the path, the query or the response body — a
+ * server may echo the request line in its body. */
 export function httpSend(timeoutMs = 5000): Send {
   return {
     async post(url, body, headers) {
-      const res = await fetch(url, {
-        method: "POST",
-        headers,
-        body,
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers,
+          body,
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (e) {
+        throw new Error(`OTLP POST to ${originOf(url)} failed: ${fetchFailure(e)}`);
+      }
       if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`OTLP POST ${url} → ${res.status}: ${text.slice(0, 200)}`);
+        // Release the connection; the body is not reported (see above).
+        await res.body?.cancel().catch(() => {});
+        throw new Error(`OTLP POST to ${originOf(url)} returned HTTP ${res.status}`);
       }
     },
   };
@@ -257,6 +288,22 @@ export function metricsPayload(
   };
 }
 
+/** POST one signal. A failure names the signal around the message of
+ * headersFor or the transport — httpSend keeps the URL out of its own. */
+async function postSignal(
+  s: Send,
+  target: OtlpTarget,
+  signal: Signal,
+  body: Buffer,
+): Promise<void> {
+  const url = `${signalBase(target, signal)}/v1/${signal}`;
+  try {
+    await s.post(url, body, headersFor(target, url, body, signal));
+  } catch (e) {
+    throw new Error(`${signal} export failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 /** Send a trace + its derived metrics. Failures throw — caller decides. */
 export async function exportRecord(
   trace: AssembledTrace,
@@ -267,8 +314,6 @@ export async function exportRecord(
   const s = send ?? httpSend(target.timeoutMs ?? 5000);
   const traces = Buffer.from(JSON.stringify(tracesPayload(trace)), "utf8");
   const metrics = Buffer.from(JSON.stringify(metricsPayload(rec)), "utf8");
-  const traceUrl = `${signalBase(target, "traces")}/v1/traces`;
-  await s.post(traceUrl, traces, headersFor(target, traceUrl, traces, "traces"));
-  const metricUrl = `${signalBase(target, "metrics")}/v1/metrics`;
-  await s.post(metricUrl, metrics, headersFor(target, metricUrl, metrics, "metrics"));
+  await postSignal(s, target, "traces", traces);
+  await postSignal(s, target, "metrics", metrics);
 }

@@ -126,6 +126,12 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   `otlpHeaderSecretArn` in CDK) now goes to the LGTM target only. Before,
   it was also sent to the CloudWatch endpoints, where it broke the SigV4
   signature, so every CloudWatch export failed.
+- **Durable stitcher**: a failed export no longer puts the endpoint URL
+  or the response body into the error that reaches the Lambda log. The
+  error names the signal, the scheme and host of the endpoint, and the
+  HTTP status or the kind of network failure (for example
+  `TypeError (ECONNREFUSED)`). The endpoint's userinfo, path or query can
+  carry a token, and a server may echo the request path in its body.
 - **k6 runner**: with the `cloudwatch` backend (EMF), a shard no longer
   sends the k6 JSON output that an earlier shard left in `/tmp`. A warm
   execution environment keeps the file, and k6 does not touch it when it

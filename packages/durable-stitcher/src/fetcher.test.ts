@@ -50,6 +50,11 @@ beforeEach(async () => {
     });
     req.resume();
     req.on("end", () => {
+      if (u.pathname.startsWith("/deny/")) {
+        // Echoes the request line, as some servers do in an error body.
+        res.writeHead(401).end(`Cannot POST ${req.url}`);
+        return;
+      }
       if (req.method !== "GET" || !u.pathname.startsWith(HISTORY_PREFIX)) {
         res.writeHead(200).end();
         return;
@@ -140,5 +145,29 @@ describe("handlerFromEnv", () => {
       expect(auth[0]).toMatch(/^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\//);
       expect(auth[0]).not.toContain("Basic");
     }
+  });
+
+  it("keeps the endpoint's path and query out of the export error", async () => {
+    // A query is not a supported endpoint shape (it would precede
+    // /v1/<signal>), but a value that has one must not leak either.
+    const handler = handlerFromEnv({
+      KAGERO_OTLP_ENDPOINT: `${base}/deny/path-tok?q=query-tok`,
+      AWS_REGION: "us-east-1",
+    });
+    const err = await handler({
+      "detail-type": "Durable Execution Status Change",
+      source: "aws.lambda",
+      detail: { durableExecutionArn: ARN, status: "SUCCEEDED" },
+    }).then(
+      () => new Error("expected a rejection"),
+      (e: unknown) => e,
+    );
+    const msg = String(err);
+    for (const t of ["path-tok", "query-tok", "Cannot POST"]) {
+      expect(msg, `${t} leaked`).not.toContain(t);
+    }
+    expect(msg).toContain(
+      `lgtm: Error: traces export failed: OTLP POST to ${base} returned HTTP 401`,
+    );
   });
 });
