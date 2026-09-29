@@ -381,7 +381,7 @@ describe("KageroDurableStitcher", () => {
     expect(findStatement(t, "cloudwatch:PutMetricData")).toBeUndefined();
   });
 
-  it("grants read on a secret passed as a token without the partial-ARN suffix", () => {
+  it("grants read on a complete-ARN token as-is", () => {
     const { stack } = makeStack();
     const secret = new secretsmanager.Secret(stack, "Header");
     new KageroDurableStitcher(stack, "Stitch", {
@@ -391,11 +391,25 @@ describe("KageroDurableStitcher", () => {
       otlpHeaderSecretArn: secret.secretArn,
     });
     const secretRead = findStatement(Template.fromStack(stack), "secretsmanager:GetSecretValue");
-    // Ref already yields the complete ARN — a "-??????" suffix would
-    // never match it and GetSecretValue would be denied at runtime.
-    expect(secretRead?.Resource).toEqual({
+    // Ref yields the complete ARN — only a suffixed resource would leave
+    // GetSecretValue denied at runtime, so the bare ARN must be granted.
+    expect(secretRead?.Resource).toContainEqual({
       Ref: stack.getLogicalId(secret.node.defaultChild as CfnElement),
     });
+  });
+
+  it("grants read on a partial-ARN token with the random-suffix wildcard", () => {
+    const { stack } = makeStack();
+    const secret = secretsmanager.Secret.fromSecretNameV2(stack, "Named", "kagero/otlp-header");
+    new KageroDurableStitcher(stack, "Stitch", {
+      entry: FIXTURE_ENTRY,
+      otlpEndpoint: "https://example.com/otlp",
+      backend: "lgtm",
+      otlpHeaderSecretArn: secret.secretArn,
+    });
+    const secretRead = findStatement(Template.fromStack(stack), "secretsmanager:GetSecretValue");
+    // fromSecretNameV2 has no suffix — the real ARN only matches "-??????".
+    expect(JSON.stringify(secretRead?.Resource)).toContain("secret:kagero/otlp-header-??????");
   });
 
   for (const backend of ["cloudwatch", "both"] as const) {
