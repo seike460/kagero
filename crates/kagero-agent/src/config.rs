@@ -237,33 +237,81 @@ fn endpoint_safe(v: &str) -> bool {
         .all(|c| c.is_ascii() && !c.is_ascii_control() && !matches!(c, '"' | '\\' | '$' | '`'))
 }
 
-/// Mask the parts of a URL that can carry credentials — userinfo
-/// (`user:pass@`) and the query or fragment (`?token=…`). The startup log
-/// prints the whole Config, and endpoint_safe lets both through.
+/// The startup-log form of a URL: scheme and authority only. Userinfo
+/// (`user:pass@`) becomes `REDACTED@`, and anything after the authority —
+/// a path (`/v1/token/…`), a query (`?token=…`) or a fragment — becomes
+/// `/REDACTED`; a bare trailing `/` stays. Any of them can carry a
+/// credential, and the startup log prints the whole Config. A value
+/// without a `scheme://` prefix is logged as `REDACTED`.
 fn redact_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
-        return url.to_string();
+        return "REDACTED".to_string();
     };
+    // RFC 3986 scheme syntax — anything else before "://" (for example
+    // `user:pass@host`) is not a scheme and must not be printed.
+    if !scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        || !scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    {
+        return "REDACTED".to_string();
+    }
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let (authority, tail) = rest.split_at(authority_end);
     let host = match authority.rfind('@') {
         Some(at) => format!("REDACTED@{}", &authority[at + 1..]),
         None => authority.to_string(),
     };
-    let path = match tail.find(['?', '#']) {
-        Some(q) => format!("{}?REDACTED", &tail[..q]),
-        None => tail.to_string(),
+    let tail = if matches!(tail, "" | "/") {
+        tail
+    } else {
+        "/REDACTED"
     };
-    format!("{scheme}://{host}{path}")
+    format!("{scheme}://{host}{tail}")
+}
+
+/// Every endpoint is a base URL for an HTTP client or a collector
+/// exporter: an absolute `http://` or `https://` URL with a host.
+/// `Url::parse` follows WHATWG, which reads `http:/h` and `http:///h` as
+/// host `h` while the collector's Go parser sees no host there — so the
+/// literal `://` and a non-empty authority are checked first.
+fn is_http_url(v: &str) -> bool {
+    let Some((_, rest)) = v.split_once("://") else {
+        return false;
+    };
+    if rest.is_empty() || rest.starts_with(['/', '?', '#']) {
+        return false;
+    }
+    reqwest::Url::parse(v).is_ok_and(|u| {
+        matches!(u.scheme(), "http" | "https") && u.host_str().is_some_and(|h| !h.is_empty())
+    })
+}
+
+fn check_http_url(key: &str, v: &str) -> Result<()> {
+    if !is_http_url(v) {
+        // The redacted form only: a malformed value may still hold a
+        // credential, and this error reaches the log.
+        anyhow::bail!(
+            "{key} must be an absolute http:// or https:// URL with a host, got {}",
+            redact_url(v)
+        );
+    }
+    Ok(())
 }
 
 fn env_endpoint(get: Lookup, key: &str) -> Result<Option<String>> {
     match get(key)? {
         Some(v) if v.is_empty() => Ok(None),
-        Some(v) if !endpoint_safe(&v) => {
-            anyhow::bail!("{key} contains characters unsafe for config templates: {v:?}")
+        // The value itself stays out of the error, as in check_http_url.
+        Some(v) if !endpoint_safe(&v) => anyhow::bail!(
+            "{key} contains characters unsafe for config templates \
+             (non-ASCII, a control character, \", \\, $ or a backtick)"
+        ),
+        Some(v) => {
+            check_http_url(key, &v)?;
+            Ok(Some(v))
         }
-        v => Ok(v),
+        None => Ok(None),
     }
 }
 
@@ -473,8 +521,13 @@ impl Config {
             collector_reload_url: get("KAGERO_COLLECTOR_RELOAD_URL")?,
 
             secret_arn: get("KAGERO_SECRET_ARN")?,
-            imds_endpoint: get("KAGERO_IMDS_ENDPOINT")?
-                .unwrap_or_else(|| "http://169.254.169.254".into()),
+            imds_endpoint: {
+                let v = get("KAGERO_IMDS_ENDPOINT")?
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or_else(|| "http://169.254.169.254".into());
+                check_http_url("KAGERO_IMDS_ENDPOINT", &v)?;
+                v
+            },
             secrets_endpoint: get("KAGERO_SECRETS_ENDPOINT")?,
 
             sample_interval: {
@@ -672,6 +725,12 @@ mod tests {
                     "KAGERO_OTLP_ENDPOINT_LGTM",
                     "https://user@host:4318/v1%20x?x=1&y=2",
                 ),
+                (
+                    "KAGERO_ENDPOINT_CW_LOGS",
+                    "HTTPS://vpce-0abc.logs.example.com/",
+                ),
+                // The IMDS IPv6 endpoint.
+                ("KAGERO_IMDS_ENDPOINT", "http://[fd00:ec2::254]"),
             ],
         )
         .unwrap();
@@ -714,6 +773,17 @@ mod tests {
             ("KAGERO_SESSION_JSON_POINTER", "/session~2"),
             ("KAGERO_OTLP_ENDPOINT_LGTM", "http://a$(id)"),
             ("KAGERO_ENDPOINT_CW_LOGS", "https://`id`.example.com"),
+            // Endpoints are absolute http(s) URLs with a host.
+            ("KAGERO_OTLP_ENDPOINT_LGTM", "lgtm:4318"),
+            ("KAGERO_OTLP_ENDPOINT", "localhost:4318"),
+            ("KAGERO_OTLP_ENDPOINT_CLOUDWATCH", "grpc://collector:4317"),
+            ("KAGERO_ENDPOINT_CW_METRICS", "https://"),
+            ("KAGERO_ENDPOINT_CW_TRACES", "https:///v1/traces"),
+            ("KAGERO_ENDPOINT_CW_LOGS", "http:/logs.example.com"),
+            ("KAGERO_ENDPOINT_CW_LOGS", "https://user@/v1"),
+            ("KAGERO_OTLP_ENDPOINT_LGTM", "http://host:port"),
+            ("KAGERO_IMDS_ENDPOINT", "169.254.169.254"),
+            ("KAGERO_IMDS_ENDPOINT", "http://:80"),
         ] {
             assert!(
                 from_vars(USER, &[(key, value)]).is_err(),
@@ -815,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_log_masks_url_userinfo() {
+    fn startup_log_keeps_only_scheme_and_authority() {
         let cfg = from_vars(
             USER,
             &[
@@ -824,41 +894,92 @@ mod tests {
                     "https://user:s3cret@lgtm.example.com:4318/v1?x=1",
                 ),
                 (
+                    "KAGERO_OTLP_ENDPOINT_CLOUDWATCH",
+                    "https://collector.example.com/v1/token/PATHTOKEN",
+                ),
+                (
+                    "KAGERO_ENDPOINT_CW_METRICS",
+                    "https://collector.example.com?token=QUERYTOKEN",
+                ),
+                (
                     "KAGERO_COLLECTOR_RELOAD_URL",
                     "http://admin:hunter2@127.0.0.1:12345/-/reload",
                 ),
+                ("KAGERO_SECRETS_ENDPOINT", "RAWTOKEN@secrets.example.com"),
                 ("KAGERO_IMDS_ENDPOINT", "http://tok@169.254.169.254"),
             ],
         )
         .unwrap();
         let logged = format!("{:?}", cfg.redacted());
-        for secret in ["s3cret", "user:", "hunter2", "admin:", "tok@"] {
+        for secret in [
+            "s3cret",
+            "user:",
+            "PATHTOKEN",
+            "QUERYTOKEN",
+            "hunter2",
+            "admin:",
+            "RAWTOKEN",
+            "tok@",
+        ] {
             assert!(
                 !logged.contains(secret),
                 "{secret:?} reached the log: {logged}"
             );
         }
-        assert!(logged.contains("https://REDACTED@lgtm.example.com:4318/v1?REDACTED"));
+        assert!(logged.contains("https://REDACTED@lgtm.example.com:4318/REDACTED"));
+        assert!(logged.contains("https://collector.example.com/REDACTED"));
+        assert!(logged.contains("http://REDACTED@127.0.0.1:12345/REDACTED"));
         assert!(logged.contains("http://REDACTED@169.254.169.254"));
-        // Only the authority is userinfo — an '@' in the path stays.
-        assert_eq!(
-            redact_url("https://host:4318/v1/a@b?c=@"),
-            "https://host:4318/v1/a@b?REDACTED"
-        );
-        assert_eq!(
-            redact_url("https://collector/v1?token=s3cret#frag"),
-            "https://collector/v1?REDACTED"
-        );
-        assert_eq!(
-            redact_url("https://host:4318/v1/metrics"),
-            "https://host:4318/v1/metrics"
-        );
-        assert_eq!(redact_url("not a url"), "not a url");
+        for (url, shown) in [
+            // A path token, a query, a fragment: all after the authority.
+            (
+                "https://collector/v1/token/S3CRET",
+                "https://collector/REDACTED",
+            ),
+            (
+                "https://collector/v1?token=s3cret#frag",
+                "https://collector/REDACTED",
+            ),
+            ("https://host?token=s3cret", "https://host/REDACTED"),
+            ("https://host#s3cret", "https://host/REDACTED"),
+            ("https://host:4318/v1/metrics", "https://host:4318/REDACTED"),
+            // Only the authority is userinfo — an '@' in the path is path.
+            ("https://host:4318/v1/a@b?c=@", "https://host:4318/REDACTED"),
+            // A bare host, with or without the trailing '/', stays.
+            ("https://host:4318", "https://host:4318"),
+            ("https://host:4318/", "https://host:4318/"),
+            // No scheme: nothing of it is printed.
+            ("not a url", "REDACTED"),
+            ("user:s3cret@host:4318/v1", "REDACTED"),
+            ("user:s3cret@host://x", "REDACTED"),
+        ] {
+            assert_eq!(redact_url(url), shown, "{url}");
+        }
         // The running config keeps the real endpoint.
         assert_eq!(
             cfg.otlp_endpoint_lgtm.as_deref(),
             Some("https://user:s3cret@lgtm.example.com:4318/v1?x=1")
         );
+    }
+
+    #[test]
+    fn malformed_endpoint_errors_name_the_key_but_not_the_value() {
+        for (key, value) in [
+            ("KAGERO_OTLP_ENDPOINT_LGTM", "user:s3cret@lgtm:4318"),
+            ("KAGERO_ENDPOINT_CW_LOGS", "ftp://user:s3cret@host"),
+            ("KAGERO_OTLP_ENDPOINT", "https://user:s3cret$@host"),
+            ("KAGERO_IMDS_ENDPOINT", "s3cret"),
+        ] {
+            let err = format!("{:#}", from_vars(USER, &[(key, value)]).unwrap_err());
+            assert!(err.contains(key), "{err}");
+            assert!(!err.contains("s3cret"), "{err}");
+        }
+    }
+
+    #[test]
+    fn empty_imds_endpoint_takes_the_default() {
+        let cfg = from_vars(USER, &[("KAGERO_IMDS_ENDPOINT", "")]).unwrap();
+        assert_eq!(cfg.imds_endpoint, "http://169.254.169.254");
     }
 
     #[test]

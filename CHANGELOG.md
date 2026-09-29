@@ -17,14 +17,16 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Agent**: startup now rejects more malformed configuration instead of
   misbehaving later. Endpoints (`KAGERO_OTLP_ENDPOINT*`,
   `KAGERO_ENDPOINT_CW_*`) may not contain `$` or a backtick, since they
-  land in shell-sourced env files. `KAGERO_HOOK_PORT`,
+  land in shell-sourced env files. They and `KAGERO_IMDS_ENDPOINT` must
+  be absolute `http://` or `https://` URLs with a host; the error names
+  the variable but does not print its value. `KAGERO_HOOK_PORT`,
   `KAGERO_APP_HOOK_PORT`, `KAGERO_OTLP_PORT`, `KAGERO_ADMIN_PORT` and the
   collector's fixed OTLP/gRPC port 4317 must all differ.
   `KAGERO_TENANT_JSON_POINTER` / `KAGERO_SESSION_JSON_POINTER` must be
   RFC 6901 pointers, and `KAGERO_MICROVM_BASELINE_GIB` /
   `KAGERO_MICROVM_BASELINE_VCPU` must be positive finite numbers.
-- **CDK**: `KageroMicrovmImage` applies the same endpoint, JSON Pointer
-  and `hookPort` checks at synth time.
+- **CDK**: `KageroMicrovmImage` applies the same endpoint (including
+  `imdsEndpoint`), JSON Pointer and `hookPort` checks at synth time.
 - **CDK**: `KageroMicrovmImage` rejects a `hookAllowedPeers` entry that
   is not an IP or CIDR at synth time. The agent already refused such an
   entry at boot.
@@ -66,8 +68,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Agent**: a deliberate collector restart (for example `/resume`
   without `KAGERO_COLLECTOR_RELOAD_URL`) no longer logs the old process
   as `child exited on its own`.
-- **Agent**: the `kagero starting` log masks the userinfo
-  (`user:password@`) of endpoint URLs.
+- **Agent**: the `kagero starting` log shows only the scheme and the
+  host (with port) of each URL. Userinfo (`user:password@`) becomes
+  `REDACTED@`, and a path, query or fragment becomes `/REDACTED`, since
+  a token can sit in any of them. A value without a scheme is shown as
+  `REDACTED`.
 - **Agent**: with `KAGERO_COLLECTOR_START=build` and `KAGERO_SECRET_ARN`
   both set, the collector now waits for `/run` as documented. Before, the
   build-time start failed and logged a `kagero.lifecycle.degraded` event

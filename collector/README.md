@@ -57,6 +57,15 @@ files that a shell sources. The agent therefore refuses to start when
 one is not printable ASCII or contains `"`, `\`, `$` or a backtick —
 percent-encode such characters in the URL.
 
+Each endpoint value, and `KAGERO_IMDS_ENDPOINT`, must also be an
+absolute `http://` or `https://` URL with a host
+(`https://otlp.example.com`, not `otlp.example.com:4318`). Otherwise the
+agent refuses to start with an error that names the variable. An empty
+value counts as unset. The startup log (`kagero starting`) shows only
+the scheme and the host (with port) of each URL: userinfo becomes
+`REDACTED@`, and a path, query or fragment becomes `/REDACTED`, since
+any of them can carry a token.
+
 ### Secret expansion safety
 
 `{{KAGERO_SECRET:...}}` and `{{KAGERO_SECRET}}` are expanded **only on the

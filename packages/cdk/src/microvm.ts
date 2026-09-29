@@ -58,6 +58,7 @@ export interface KageroMicrovmConfig {
    *  only; `resources` is passed through as given, not derived. */
   baselineGib: number;
   baselineVcpu: number;
+  /** OTLP endpoints: absolute http:// or https:// URLs with a host. */
   otlpEndpointLgtm?: string;
   otlpEndpointCloudwatch?: string;
   /**
@@ -109,7 +110,9 @@ export interface KageroMicrovmConfig {
   secretArn?: string;
   /** Secrets Manager REST endpoint override (KAGERO_SECRETS_ENDPOINT). */
   secretsEndpoint?: string;
-  /** IMDS endpoint override (KAGERO_IMDS_ENDPOINT). */
+  /** IMDS endpoint override (KAGERO_IMDS_ENDPOINT). Like the OTLP
+   *  endpoints above, an absolute http:// or https:// URL with a host —
+   *  the agent refuses anything else at boot. */
   imdsEndpoint?: string;
   /** Collector supervision — without collectorBin the agent is
    *  supervisor-only and exports no telemetry. */
@@ -203,6 +206,31 @@ function checkEndpoint(label: string, v: string): void {
       `${label} must be printable ASCII without ", \\, $ or backtick: ${JSON.stringify(v)}`,
     );
   }
+  // Empty is "unset" — the value is not emitted, and the agent treats
+  // an empty endpoint as unset too.
+  if (v !== "") checkHttpUrl(label, v);
+}
+
+/** Mirrors the agent's is_http_url (config.rs): an absolute http:// or
+ *  https:// URL with a host. The WHATWG parser reads `http:/h` and
+ *  `http:///h` as host `h`, so the literal `://` and a non-empty
+ *  authority are checked first, as the agent does. */
+function checkHttpUrl(label: string, v: string): void {
+  const rest = v.includes("://") ? v.slice(v.indexOf("://") + 3) : "";
+  let ok = rest !== "" && !/^[/?#]/.test(rest);
+  if (ok) {
+    try {
+      const u = new URL(v);
+      ok = (u.protocol === "http:" || u.protocol === "https:") && u.hostname !== "";
+    } catch {
+      ok = false;
+    }
+  }
+  if (!ok) {
+    throw new Error(
+      `${label} must be an absolute http:// or https:// URL with a host: ${JSON.stringify(v)}`,
+    );
+  }
 }
 
 /** Mirrors the agent's PeerRule::parse (config.rs): each entry is an IP
@@ -266,6 +294,8 @@ export function kageroEnvironment(cfg: KageroMicrovmConfig): Record<string, stri
   ] as const) {
     if (v !== undefined) checkEndpoint(label, v);
   }
+  // Not rendered into templates — only the agent's URL check applies.
+  if (cfg.imdsEndpoint) checkHttpUrl("imdsEndpoint", cfg.imdsEndpoint);
   for (const [label, v] of [
     ["tenantJsonPointer", cfg.tenantJsonPointer],
     ["sessionJsonPointer", cfg.sessionJsonPointer],

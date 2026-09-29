@@ -167,6 +167,36 @@ describe("kageroEnvironment", () => {
     expect(env.KAGERO_OTLP_ENDPOINT_LGTM).toBe("https://user@host:4318/v1%20x?x=1&y=2");
   });
 
+  it("rejects endpoints that are not absolute http(s) URLs, as the agent does at boot", () => {
+    for (const bad of [
+      "lgtm:4318",
+      "localhost:4318",
+      "grpc://collector:4317",
+      "https://",
+      "https:///v1/traces",
+      "http:/logs.example.com",
+      "http://host:port",
+    ]) {
+      expect(() => kageroEnvironment({ ...baseKagero(), otlpEndpoint: bad })).toThrow(
+        /otlpEndpoint must be an absolute http/,
+      );
+    }
+    for (const bad of ["169.254.169.254", "http://:80"]) {
+      expect(() => kageroEnvironment({ ...baseKagero(), imdsEndpoint: bad })).toThrow(
+        /imdsEndpoint must be an absolute http/,
+      );
+    }
+    const env = kageroEnvironment({
+      ...baseKagero(),
+      otlpEndpoint: "",
+      otlpEndpointCwLogs: "HTTPS://vpce-0abc.logs.example.com/",
+      imdsEndpoint: "http://[fd00:ec2::254]",
+    });
+    expect(env.KAGERO_OTLP_ENDPOINT).toBeUndefined();
+    expect(env.KAGERO_ENDPOINT_CW_LOGS).toBe("HTTPS://vpce-0abc.logs.example.com/");
+    expect(env.KAGERO_IMDS_ENDPOINT).toBe("http://[fd00:ec2::254]");
+  });
+
   it("rejects JSON Pointers the agent refuses at boot", () => {
     for (const bad of ["tenant/id", "/a~2b", "/a~"]) {
       expect(() => kageroEnvironment({ ...baseKagero(), tenantJsonPointer: bad })).toThrow(
