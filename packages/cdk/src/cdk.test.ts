@@ -317,6 +317,7 @@ describe("KageroMicrovmImage", () => {
       ["runtimeHookTimeoutSeconds", 0],
       ["imageHookTimeoutSeconds", 301],
       ["baselineGib", 0],
+      ["hookPort", 0],
       ["hookPort", 70000],
       ["hookPort", 2019],
       ["hookPort", 2020],
