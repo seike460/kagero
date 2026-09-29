@@ -63,7 +63,6 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   metadata endpoint or the Secrets Manager endpoint no longer puts the
   request URL into the log or the degraded event. Those URLs are
   configurable and may carry a token in the path or query.
-
 - **Agent**: the hook relay, the loopback OTLP export, the collector
   reload call and the credential lookups (IMDS / container credentials)
   no longer go through `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`, and
