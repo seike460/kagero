@@ -84,6 +84,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Simulator**: `kagero-sim run` from the built package (`dist/cli.js`)
   now starts the test app. Before, it looked for `test-app.ts` next to the
   compiled files and failed before the first hook.
+- **Simulator**: the real-collector mode (`KAGERO_SIM_COLLECTOR_BIN`) now
+  starts the collector. Before, the simulator wrote the collector config
+  into its work directory, which anyone can write to so that the test app
+  can keep its state there. The agent refuses to render into such a
+  directory, so the collector never started and the E2E failed.
 - **Durable stitcher**: fetching the execution history no longer throws a
   `TypeError` on every notification. The SDK client's `send` was called
   without its client, so the stitcher never exported a trace or a metric.

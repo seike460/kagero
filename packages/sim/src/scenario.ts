@@ -93,7 +93,12 @@ export async function startSim(opts: SimOptions): Promise<SimHandle> {
     collectorEnv.KAGERO_COLLECTOR_CONFIG_TEMPLATE =
       process.env.KAGERO_SIM_COLLECTOR_TEMPLATE ??
       join(here, "..", "fixtures", "collector.yaml.tmpl");
-    collectorEnv.KAGERO_COLLECTOR_CONFIG_OUT = join(dir, "collector.yaml");
+    // Not in `dir`: the agent refuses to render into a directory the app
+    // can write (0777 without the sticky bit).
+    collectorEnv.KAGERO_COLLECTOR_CONFIG_OUT = join(
+      mkdtempSync(join(tmpdir(), "kagero-sim-collector-")),
+      "collector.yaml",
+    );
     collectorEnv.KAGERO_OTLP_ENDPOINT_LGTM = `http://127.0.0.1:${otlp.port}`;
   }
   const agent = spawnAgent({
