@@ -201,6 +201,16 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   The threat model says the same. Renovate is not set up yet, and the
   npm packages stay the private `@kagero/*` workspace packages until
   they are published under `@seike460/`.
+- **Docs**: the design docs now describe the tests that exist. The
+  simulator E2E drives the real agent binary against a mock OTLP
+  receiver, and through otelcol-contrib only with
+  `KAGERO_SIM_COLLECTOR_BIN`. It does not freeze the processes; the
+  `docker pause` approximation and a check against `grafana/otel-lgtm`
+  are planned. The TypeScript checks and the E2E run on x86_64 runners.
+  The dashboard checks are the regeneration diff and a simple PromQL
+  check, with no snapshot test and no LogQL check. The English
+  repository tree is translated, and both trees list `docker/` and
+  `.github/workflows/`.
 
 ## [0.1.0] — 2026-09-28
 

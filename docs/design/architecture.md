@@ -1,7 +1,7 @@
 # kagero 全体設計
 
 - 状態: 実装が先行しています（逸脱の記録は [ADR-012](../decisions.md)）。設計の確定は、PoC の結果で行います。
-- 最終更新: 2026-09-26
+- 最終更新: 2026-09-29
 - 関連文書: [MicroVMs の設計](microvms.md) / [関数・Durable・k6 の設計](functions-durable-k6.md) / [ADR](../decisions.md) / [ロードマップ](../roadmap.md) / [PoC](../poc/README.md) / [調査](../research/2026-09-landscape.md)
 
 ## 1. 目的と非目的
@@ -57,8 +57,10 @@ flowchart LR
 
 ```text
 kagero/
+├── .github/workflows/        # CI（ci.yml）とリリース（release.yml）
 ├── crates/
 │   └── kagero-agent/         # MicroVM の中で動くエージェント（唯一の Rust 部品）
+├── docker/                   # エージェントの OCI イメージ（agent.Dockerfile。GHCR で配る）
 ├── packages/                 # pnpm workspace（TypeScript）
 │   ├── semconv/              # 属性の定数と文書の生成器（Weaver 互換スキーマの YAML が正本）
 │   ├── secrets/              # Secrets Manager の ARN 解決（durable-stitcher / k6-runner 共用）
@@ -78,7 +80,8 @@ kagero/
 │   ├── dashboards/{lgtm,cloudwatch}/
 │   └── alerts/{lgtm,cloudwatch}/
 ├── examples/                 # Node.js・Python の MicroVM イメージ例
-└── docs/
+└── docs/                     # 設計、ADR、ロードマップ、PoC、調査
+    └── reference/            # 属性とメトリクスの一覧（semconv から生成）
 ```
 
 ## 4. 言語と道具
@@ -91,12 +94,12 @@ kagero/
 | 外（制御用の Lambda、CDK、ダッシュボード生成、simulator） | TypeScript（Node.js 24） | CDK と Grafana Foundation SDK が TypeScript で使えます。制御用の Lambda は呼ばれる回数が少なく、コールドスタートの差が効きません |
 
 道具:
-- Rust: `cargo fmt`、`cargo clippy -D warnings`、`cargo test` を使います。ARM64 の静的バイナリ（`aarch64-unknown-linux-musl`）にします。クロスビルドの手段は cargo-zigbuild を候補にします。
+- Rust: `cargo fmt`、`cargo clippy -D warnings`、`cargo test` を使います。ARM64 の静的バイナリ（`aarch64-unknown-linux-musl`）にします。リリースのビルドは、ARM64 のランナーの上で Alpine の Rust（musl）を使い、ネイティブで行います（`docker/agent.Dockerfile`）。クロスビルドはしません。
 - Rust の主な crate（実装済み）: tokio、hyper、serde、reqwest（rustls）、libc。
 - TypeScript: strict、ES modules、Biome、vitest、pnpm を使います。制御用の Lambda は CDK の `NodejsFunction` でデプロイします。
 - 属性の定義: Weaver 互換スキーマの YAML を正本にし、`packages/semconv` の生成器が Rust と TypeScript の定数と文書を出します（OpenTelemetry Weaver 本体への移行経路は残しています）。
 - 版の固定: mise で道具の版を固定します。依存の更新は Renovate に任せる予定です。まだ設定していないため、いまは手で更新します。
-- CI: GitHub Actions を使います。ARM64 の Linux ランナー（`ubuntu-24.04-arm`）でビルドとテストを行っています。
+- CI: GitHub Actions を使います。Rust の lint・テスト・MSRV の確認と、配布イメージのビルドは、ARM64 の Linux ランナー（`ubuntu-24.04-arm`）で行います。TypeScript の検査、simulator での E2E、生成物の差分検査は `ubuntu-latest`（x86_64）で行います。このため E2E が動かすエージェントは、x86_64 向けにビルドしたものです。
 
 ## 5. 2 つのバックエンド
 
@@ -149,7 +152,7 @@ kagero/
 - 非対応の扱い: 片方で出せないパネルは、「このバックエンドでは非対応」と書いたテキストパネルにします。黙って消しません。
 - 出力: v1 の JSON を出します。Amazon Managed Grafana 12.4 は schema v2 に対応していないためです。Grafana 13 は v1 を自動で移行します。
 - 置き場所: 生成物は `generated/` に置いて commit します。CI で再生成し、差分が出ないことを確かめます。
-- 検証: スナップショットテストと、PromQL・LogQL の構文チェックを行います。構文チェックの手段は PoC-05・06 で決めます。
+- 検証: いまは、再生成の差分と、PromQL の簡単な構文チェック（括弧の対応と空のセレクタ）だけを CI で行います。LogQL と Logs Insights の構文チェックは、まだありません。本格的な構文チェックの手段は PoC-05・06 で決めます。
 - 配布: JSON の import、ファイルによる provisioning、gcx や Git Sync（Grafana 13）に対応します。CDK での配布は v0.5 で検討します。
 - クエリ費用の約束: 更新間隔は 1 分以上にします。系列の多いパネルは `topk` で絞ります。Logs Insights のパネルは、折りたたんだ行に置きます。
 
@@ -193,10 +196,10 @@ kagero/
 ## 10. テスト
 
 - 単体テスト: Rust は `cargo test`、TypeScript は vitest で書きます。
-- simulator での E2E: TypeScript の simulator が、本物と同じ順序でフックを呼びます。停止と再開は `docker pause` と `docker unpause` で近似します。送り先は `grafana/otel-lgtm` のコンテナにし、Loki・Tempo・Prometheus の HTTP API で結果を確かめます。
-- simulator の限界: `docker pause` はメモリのスナップショットを再現しません。スナップショット固有の問題は、PoC と契約テストで確かめます。
-- 契約テスト: PoC の手順を、月に 1 回 AWS 上で流し直します。手動で起動し、予算の上限を設けます。
-- ダッシュボードのテスト: 再生成の差分、スナップショット、構文チェックを CI で行います。
+- simulator での E2E: TypeScript の simulator（`packages/sim`）が、エージェントの実際のバイナリをプロセスとして起動し、本物と同じ順序でフックを呼びます。送り先は、simulator の中に立てる模擬の OTLP 受け口です。`KAGERO_SIM_COLLECTOR_BIN` で otelcol-contrib を指定したときだけ、実際の収集器を通します。CI では両方を流します。
+- simulator の限界: 停止と再開は、フックを呼ぶだけです。プロセスは止めず、メモリのスナップショットも再現しません。実際のバックエンド（Loki・Tempo・Mimir、CloudWatch）にも送りません。スナップショット固有の問題とバックエンドでの見え方は、PoC と契約テストで確かめます。`docker pause` と `docker unpause` での近似と、`grafana/otel-lgtm` のコンテナに送って Loki・Tempo・Prometheus の HTTP API で確かめる E2E は、まだありません（予定）。
+- 契約テスト: PoC の手順を、月に 1 回 AWS 上で流し直します。手動で起動し、予算の上限を設けます。実機の PoC を終えてから始めます。
+- ダッシュボードのテスト: 再生成の差分と、PromQL の簡単な構文チェックを CI で行います（[7 章](#7-ダッシュボードとアラートの仕様)）。
 
 ## 11. リリースとサプライチェーン
 
