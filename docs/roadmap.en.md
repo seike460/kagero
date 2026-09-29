@@ -1,8 +1,8 @@
 # Roadmap
 
-> English translation of [roadmap.md](roadmap.md) (Japanese is canonical). Last synced: 2026-09-27.
+> English translation of [roadmap.md](roadmap.md) (Japanese is canonical). Last synced: 2026-09-29.
 
-- Last updated: 2026-09-26
+- Last updated: 2026-09-29
 - Related documents: [Overall design](design/architecture.en.md) / [ADR](decisions.en.md) / [PoC](poc/README.en.md)
 
 ## Principles
@@ -35,6 +35,8 @@
 6. E2E tests on the simulator pass in CI.
 7. Generated dashboards load in Grafana 13 and Amazon Managed Grafana 12.4.
 
+v0.1.0 was released as a preview on 2026-09-28, before these criteria were met. It meets criterion 6. Criterion 5 is only partly checked, in the simulator (while the OTLP destination is down, the agent keeps answering hooks and relaying them to the app). Criteria 1–4 and 7 wait for the PoCs on real AWS (PoC-01–05) and for the load check in Grafana 13 and Amazon Managed Grafana 12.4. v0.1.0 also ships, as previews, modules that the table above places in later stages (v0.2–v0.5): pricing, alerts, the durable stitcher, the k6 runner, and the CDK constructs ([ADR-012](decisions.en.md)). See the 0.1.0 section of the [CHANGELOG](../CHANGELOG.md).
+
 ## Branching when circumstances change
 
 - If A (MicroVMs) gets stuck in a PoC, advance B (Lambda functions) first. A resumes once the blocking point is resolved.
@@ -47,6 +49,7 @@
 - Use SemVer. Compatibility is not guaranteed while on 0.x.
 - One version across the entire monorepo.
 - Bump the minor version each time a stage is completed (v0.1.0, v0.2.0, etc.).
+- v0.1.0 is an exception to this rule: it was released before the v0.1 stage was completed (see the note under "v0.1 acceptance criteria").
 
 ## Out of scope
 

@@ -105,7 +105,8 @@ pub fn render_template(template: &str, cfg: &Config, ctx: &RenderContext) -> Str
             },
             // AWS OTLP endpoints are per-signal, each with its own SigV4
             // service (monitoring/logs/xray). Resolution order: per-signal
-            // override → legacy single-endpoint env → region-derived AWS
+            // override → shared CloudWatch endpoint
+            // (KAGERO_OTLP_ENDPOINT_CLOUDWATCH) → region-derived AWS
             // default. An empty result leaves the mark → fail closed.
             "KAGERO_ENDPOINT_CW_METRICS" => {
                 cw_signal_endpoint(cfg, &cfg.otlp_endpoint_cw_metrics, "monitoring")?
@@ -188,9 +189,10 @@ pub fn render_template(template: &str, cfg: &Config, ctx: &RenderContext) -> Str
     out
 }
 
-/// Per-signal CloudWatch OTLP endpoint: explicit override, else the legacy
-/// single-endpoint env, else the AWS default for this signal's service
-/// name and region (logs./monitoring./xray.<region>.amazonaws.com).
+/// Per-signal CloudWatch OTLP endpoint: explicit override, else the shared
+/// CloudWatch endpoint (KAGERO_OTLP_ENDPOINT_CLOUDWATCH), else the AWS
+/// default for this signal's service name and region
+/// (logs./monitoring./xray.<region>.amazonaws.com).
 fn cw_signal_endpoint(cfg: &Config, ov: &Option<String>, service: &str) -> Option<String> {
     if let Some(e) = ov.as_ref().filter(|e| !e.is_empty()) {
         return Some(e.clone());
@@ -221,8 +223,10 @@ fn secret_value_safe(v: &str) -> bool {
 
 pub struct Collector {
     pid: std::sync::Arc<Mutex<Option<u32>>>,
-    /// Set before a deliberate stop so the exit watcher doesn't cry crash.
-    expected_exit: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The current child's deliberate-stop flag, set before a stop so its
+    /// exit watcher doesn't cry crash. Every spawn gets a fresh flag: a
+    /// restart must not clear the flag the old child's watcher still reads.
+    expected_exit: Mutex<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     reaper: &'static Reaper,
     /// Canonical config path the rendered file was last written to. The
     /// collector argv must use THIS, never cfg.collector_config_out: the
@@ -235,7 +239,7 @@ impl Collector {
     pub fn new(reaper: &'static Reaper) -> Self {
         Self {
             pid: std::sync::Arc::new(Mutex::new(None)),
-            expected_exit: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            expected_exit: Mutex::default(),
             reaper,
             resolved_out: Mutex::new(None),
         }
@@ -352,19 +356,14 @@ impl Collector {
             // export — it is trusted code, unlike the app.
             scrub_aws_env: false,
         })?;
-        // Clear the deliberate-stop flag — a crash after a restart must
-        // still be reported as a crash by the exit watcher.
-        self.expected_exit
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let expected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        *self
+            .expected_exit
+            .lock()
+            .map_err(|_| anyhow::anyhow!("collector lock poisoned"))? = expected.clone();
         *self.lock()? = Some(pid);
         info!(pid, "collector started");
-        process::watch_exit(
-            self.reaper,
-            pid,
-            "collector",
-            self.pid.clone(),
-            self.expected_exit.clone(),
-        );
+        process::watch_exit(self.reaper, pid, "collector", self.pid.clone(), expected);
         // Wait for the OTLP receiver to actually listen — a just-spawned
         // collector takes a few hundred ms, and telemetry posted in that
         // gap hits connection-refused and is dropped forever.
@@ -398,7 +397,7 @@ impl Collector {
     pub async fn reload(&self, cfg: &Config, budget: std::time::Duration) -> Result<()> {
         let started = std::time::Instant::now();
         if let Some(url) = &cfg.collector_reload_url {
-            let resp = reqwest::Client::new()
+            let resp = crate::local_http_client()
                 .post(url)
                 .timeout(budget)
                 .send()
@@ -406,7 +405,9 @@ impl Collector {
             match resp {
                 Ok(r) if r.status().is_success() => return Ok(()),
                 Ok(r) => warn!(status = %r.status(), "collector reload endpoint failed"),
-                Err(e) => warn!(?e, "collector reload endpoint unreachable"),
+                // The reload URL is configurable and may carry a token;
+                // keep it out of the log.
+                Err(e) => warn!(error = ?e.without_url(), "collector reload endpoint unreachable"),
             }
         }
         // The HTTP attempt already consumed part of the budget — the
@@ -421,6 +422,8 @@ impl Collector {
     /// budget), SIGKILL. Used at /terminate and when the container stops.
     pub async fn stop(&self, budget: std::time::Duration) -> Result<()> {
         self.expected_exit
+            .lock()
+            .map_err(|_| anyhow::anyhow!("collector lock poisoned"))?
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let Some(pid) = self.lock()?.take() else {
             return Ok(());
@@ -957,12 +960,28 @@ mod tests {
         ] {
             let tpl = std::fs::read_to_string(root.join(rel))
                 .unwrap_or_else(|e| panic!("read {rel}: {e}"));
+            let lines: Vec<&str> = tpl.lines().map(str::trim).collect();
             for key in crate::semconv_gen::METRIC_LABEL_FORBIDDEN {
-                let occurrences = tpl.matches(key).count();
+                // Count strip statements only — the Alloy template also
+                // names the ids in its `set(...)` stamping statements.
+                // attributes/resource processors: `- key: k` + `action: delete`.
+                let key_line = format!("- key: {key}");
+                let processor_deletes = lines
+                    .windows(2)
+                    .filter(|w| w[0] == key_line && w[1] == "action: delete")
+                    .count();
+                // OTTL: `delete_key(attributes, "k")`, escaped inside Alloy strings.
+                let ottl_deletes = tpl
+                    .matches(&format!("delete_key(attributes, \"{key}\")"))
+                    .count()
+                    + tpl
+                        .matches(&format!("delete_key(attributes, \\\"{key}\\\")"))
+                        .count();
+                let strips = processor_deletes + ottl_deletes;
                 assert!(
-                    occurrences >= 3,
-                    "{rel}: forbidden key {key} must appear in resource-level, \
-                     datapoint-level, AND scope-level strip lists"
+                    strips >= 3,
+                    "{rel}: forbidden key {key} must be deleted in resource-level, \
+                     datapoint-level, AND scope-level strip lists ({strips} found)"
                 );
             }
         }
@@ -1073,6 +1092,50 @@ mod tests {
         }
     }
 
+    /// The CloudWatch Logs OTLP endpoint writes only to a log group and
+    /// stream that already exist. A name built from a value that `/run`
+    /// delivers could not be created in advance, so every export would
+    /// be rejected.
+    #[test]
+    fn cloudwatch_log_destination_is_known_before_run() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        for rel in [
+            "collector/cloudwatch/collector.yaml.tmpl",
+            "collector/rotel/cloudwatch.env.tmpl",
+        ] {
+            let tpl = std::fs::read_to_string(root.join(rel))
+                .unwrap_or_else(|e| panic!("read {rel}: {e}"));
+            let headers: Vec<&str> = tpl
+                .lines()
+                .filter(|l| !l.trim_start().starts_with('#') && l.contains("x-aws-log-"))
+                .collect();
+            for name in ["x-aws-log-group", "x-aws-log-stream"] {
+                assert!(
+                    headers.iter().any(|l| l.contains(name)),
+                    "{rel}: no {name} header"
+                );
+            }
+            for line in headers {
+                for mark in [
+                    "{{KAGERO_MICROVM_ID}}",
+                    "{{KAGERO_TENANT_ID}}",
+                    "{{KAGERO_SESSION_ID}}",
+                    "{{KAGERO_SECRET",
+                ] {
+                    assert!(
+                        !line.contains(mark),
+                        "{rel}: the log destination uses {mark}, known only at /run: {line}"
+                    );
+                }
+            }
+        }
+    }
+
     /// A template referencing an endpoint whose env var is unset must
     /// keep its placeholder — configure_and_ensure_running then fails
     /// closed instead of writing `endpoint: ""` (silent export void).
@@ -1092,6 +1155,85 @@ mod tests {
         assert!(out.contains("{{KAGERO_ENDPOINT_LGTM}}"));
     }
 
+    /// A restart must not clear the flag the OLD child's exit watcher
+    /// reads — otherwise every deliberate restart (e.g. /resume without a
+    /// reload URL) logs "child exited on its own".
+    #[tokio::test]
+    async fn failed_reload_logs_no_reload_url_secret() {
+        #[derive(Clone, Default)]
+        struct Capture(std::sync::Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+            type Writer = Capture;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+        let logs = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let mut cfg = config::fixture();
+        // Port 1 refuses: the reload POST fails with a real reqwest error.
+        cfg.collector_reload_url = Some("http://127.0.0.1:1/reload/path-tok?q=query-tok".into());
+        cfg.collector_bin = None; // the restart fallback then fails; only the log matters here
+        let c = Collector::new(crate::process::Reaper::idle());
+        let _ = c.reload(&cfg, std::time::Duration::from_secs(2)).await;
+
+        let text = String::from_utf8_lossy(&logs.0.lock().unwrap()).into_owned();
+        assert!(
+            text.contains("collector reload endpoint unreachable"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("path-tok") && !text.contains("query-tok"),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_keeps_the_old_childs_stop_flag() {
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+        let mut cfg = config::fixture();
+        cfg.collector_bin = Some("/bin/sh".into());
+        cfg.collector_args = vec!["-c".into(), "exec sleep 30".into()];
+        let c = Collector::new(crate::process::Reaper::idle());
+        *c.resolved_out.lock().unwrap() = Some("/dev/null".into());
+
+        c.start(&cfg, Duration::ZERO).await.unwrap();
+        let first_pid = c.pgid().unwrap();
+        let first = c.expected_exit.lock().unwrap().clone();
+        c.stop(Duration::ZERO).await.unwrap();
+        c.start(&cfg, Duration::ZERO).await.unwrap();
+        let second_pid = c.pgid().unwrap();
+        let second = c.expected_exit.lock().unwrap().clone();
+        c.stop(Duration::ZERO).await.unwrap();
+        // No reaper thread under test — reap both children here.
+        for pid in [first_pid, second_pid] {
+            while unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 0) } == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+            {}
+        }
+
+        assert!(
+            first.load(Ordering::Relaxed),
+            "the first child's exit must still read as deliberate"
+        );
+        assert!(!std::sync::Arc::ptr_eq(&first, &second));
+    }
+
     #[test]
     fn metric_attrs_exclude_instance_ids() {
         let id = Identity {
@@ -1105,10 +1247,16 @@ mod tests {
         let (res, met) = out.split_once("met: |").unwrap();
         // IDs allowed on the resource (log/trace) side…
         assert!(res.contains("mvm-1"));
-        assert!(res.contains("t"));
+        assert!(res.contains("- key: kagero.tenant.id\n      value: \"t\""));
+        assert!(res.contains("- key: kagero.session.id\n      value: \"s\""));
         // …but never on the metric side (ADR-008).
         assert!(!met.contains("mvm-1"));
-        assert!(!met.contains("kagero.tenant.id"));
+        for key in crate::semconv_gen::METRIC_LABEL_FORBIDDEN {
+            assert!(
+                !met.contains(&format!("- key: {key}\n")),
+                "forbidden key {key} leaked into metric attrs"
+            );
+        }
         assert!(met.contains("kagero.microvm.image.name"));
     }
 }

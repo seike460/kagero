@@ -1,8 +1,9 @@
 //! kagero — PID 1 supervisor for AWS Lambda MicroVMs.
 //!
 //! Usage: `kagero -- <app command...>`
-//! Order of business (microvms.md §4): start the collector (build mode only),
-//! spawn the app with dropped privileges, serve the hook port.
+//! Order of business (microvms.md §4): bind the hook and admin ports,
+//! start the collector (build mode only), spawn the app with dropped
+//! privileges, serve the hook port.
 
 mod app;
 mod collector;
@@ -18,10 +19,11 @@ mod sigv4;
 mod telemetry;
 mod usage;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use tracing::info;
+use tokio::net::TcpListener;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use config::{CollectorStart, Config};
@@ -37,6 +39,20 @@ fn parse_app_command() -> Vec<String> {
     }
 }
 
+/// HTTP client for peers inside the MicroVM or on its link-local network:
+/// the app hook relay, the loopback OTLP receiver, the collector reload
+/// endpoint and the credential endpoints. HTTP(S)_PROXY / ALL_PROXY must
+/// never capture these requests (AWS asks for NO_PROXY=169.254.169.254
+/// for the same reason), and a redirect must not carry a hook body or a
+/// credential request to another host.
+fn local_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("reqwest client")
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // JSON to stdout: failures must reach CloudWatch Logs even when the
@@ -50,17 +66,31 @@ async fn main() -> Result<()> {
 
     let app_command = parse_app_command();
     let cfg = Config::from_env(app_command)?;
-    info!(?cfg, "kagero starting");
+    info!(cfg = ?cfg.redacted(), "kagero starting");
 
     // PID 1: reap everything, including adopted orphans.
     let reaper = Reaper::start();
 
     let agent = Arc::new(Agent::new(cfg.clone(), reaper));
 
+    // Bind before the untrusted app starts — it could otherwise take either
+    // port first and answer in kagero's place. The hook port is the only
+    // way hooks arrive, so failing to bind it is fatal; the admin port is
+    // health only.
+    let hook_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), agent.cfg.hook_port);
+    let hook_listener = TcpListener::bind(hook_addr)
+        .await
+        .with_context(|| format!("bind hook port {hook_addr}"))?;
+    let admin_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), agent.cfg.admin_port);
+    let admin_listener = TcpListener::bind(admin_addr)
+        .await
+        .inspect_err(|e| warn!(?e, %admin_addr, "admin endpoint unavailable; continuing"))
+        .ok();
+
     // Optional build-time collector start (ADR-005 — PoC-03/04 decides the
     // default; both modes are implemented). configure_and_ensure_running
     // is a no-op when no collector binary is configured.
-    if agent.cfg.collector_start == CollectorStart::Build {
+    if agent.cfg.collector_starts_at_build() {
         let id = identity::Identity::default();
         let ctx = collector::RenderContext {
             identity: &id,
@@ -78,6 +108,8 @@ async fn main() -> Result<()> {
                 serde_json::Map::new(),
             );
         }
+    } else if agent.cfg.collector_start == CollectorStart::Build {
+        info!("KAGERO_SECRET_ARN is set; the collector starts at /run");
     }
 
     // Spawn the app with dropped privileges in its own process group.
@@ -109,13 +141,10 @@ async fn main() -> Result<()> {
     }
 
     // Loopback admin endpoint (health only).
-    {
-        let admin = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), agent.cfg.admin_port);
-        let a = agent.clone();
-        tokio::spawn(hooks::serve_admin(a, admin));
+    if let Some(listener) = admin_listener {
+        tokio::spawn(hooks::serve_admin(agent.clone(), listener));
     }
 
     // The hook port: the only externally reachable endpoint.
-    let hook_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), agent.cfg.hook_port);
-    hooks::serve(agent, hook_addr).await
+    hooks::serve(agent, hook_listener).await
 }

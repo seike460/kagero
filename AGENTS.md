@@ -5,7 +5,8 @@
 ## このリポジトリ
 
 - kagero は、Grafana で AWS Lambda ファミリーを見るための OSS です。
-- リリース前です。実装は `crates/` と `packages/` にあり、CI と simulator の E2E で検証しています。AWS の実機での PoC はまだです（逸脱の記録は ADR-012）。
+- 0.x のプレビューを公開しています。公開した版と変更点は `CHANGELOG.md` にあります。配布物は、エージェントのイメージ `ghcr.io/seike460/kagero` だけです。`packages/*` は npm に公開していません。
+- 実装は `crates/` と `packages/` にあり、CI と simulator の E2E で検証しています。AWS の実機での PoC はまだです（逸脱の記録は ADR-012）。
 - 設計の正本は `docs/` にあります。作業の前に、`docs/design/architecture.md` と `docs/decisions.md` を読みます。
 
 ## いまの段階でしてよいこと・しないこと
@@ -51,6 +52,38 @@
 - Conventional Commits（feat / fix / chore / docs / refactor / test）を使います。メッセージは日本語でかまいません。
 - 機能ごとにブランチを切ります。
 - 秘密情報を commit しません。
+
+## リリース
+
+- 版はモノレポ全体で 1 つです（[版の付け方](docs/roadmap.md#版の付け方)）。版は `Cargo.toml` の `[workspace.package]`、`Cargo.lock` の `kagero-agent`、ルートと `packages/*` の `package.json`、`CHANGELOG.md` の見出しにあります。
+- `vX.Y.Z` の tag を push すると、`.github/workflows/release.yml` が動きます。tag を打った commit で CI の全 job を流し、tag と版の一致を確かめます。すべて通ったときだけ、`ghcr.io/seike460/kagero` に `X.Y.Z`・`X.Y`・`latest` を push します。
+- GitHub Release は、手で作ります。
+
+手順は次のとおりです。
+
+1. 変更を PR で main に入れ、CI が通ったことを確かめます。
+2. 版を上げる PR を作ります。
+   - `Cargo.toml` の `version` と、9 個の `package.json` の `version` を `X.Y.Z` にします。
+   - `cargo check --workspace` で、`Cargo.lock` の `kagero-agent` の版を更新します。CI とイメージのビルドは `--locked` なので、更新を忘れると失敗します。
+   - `CHANGELOG.md` の `## [Unreleased]` を `## [X.Y.Z] — YYYY-MM-DD` に変え、その上に空の `## [Unreleased]` を足します。末尾のリンク定義も直します。`releases/tag/vX.Y.Z` を指す `[X.Y.Z]` の行を足し、`[Unreleased]` の行は `compare/vX.Y.Z...HEAD` に変えます。
+   - README.md と README.ja.md の状態の記述を、公開する版に合わせます。
+3. その PR を main に入れ、CI が通ったことを確かめます。
+4. main のその commit に、注釈付きの tag を打って push します。
+
+   ```sh
+   git tag -a vX.Y.Z -m vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+5. `release.yml` が成功したら、公開したイメージを確かめます。`docker buildx imagetools inspect ghcr.io/seike460/kagero:X.Y.Z` で `linux/arm64` のイメージがあることを見ます。`X.Y` と `latest` が同じ digest を指すことも確かめます。
+6. GitHub Release を作ります。本文は `CHANGELOG.md` の `[X.Y.Z]` の節です。
+
+   ```sh
+   gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file <節を書き出したファイル>
+   ```
+
+- `release.yml` がイメージの push より前に失敗したときは、何も公開されていません。tag を消して、直した commit に同じ版の tag を打ち直します。
+- イメージを push した後は、その版の tag を打ち直しません。直した内容は、次の版で出します。
 
 ## 書いてはいけない情報
 

@@ -25,7 +25,6 @@ pub struct UsageSnapshot {
     pub running_seconds: f64,
     pub burst_vcpu_seconds: f64,
     pub burst_gib_seconds: f64,
-    pub suspend_seconds: f64,
     pub resumes: u64,
     pub suspends: u64,
     /// Suspend-duration histogram in OTLP shape: len = bounds+1, each
@@ -33,7 +32,8 @@ pub struct UsageSnapshot {
     /// last bucket = observations above the last bound). The sum of
     /// suspend_buckets must equal suspend_count — exporting cumulative
     /// (le-style) counts would violate the OTLP data model and break
-    /// backends that re-cumulate. suspend_sum is the OTLP `sum`.
+    /// backends that re-cumulate. suspend_sum is the OTLP `sum` and the
+    /// summary log's total suspended seconds.
     pub suspend_count: u64,
     pub suspend_sum: f64,
     pub suspend_buckets: Vec<u64>,
@@ -51,6 +51,9 @@ struct Inner {
     snapshot: UsageSnapshot,
     last_cpu_usec: Option<u64>,
     suspend_started_nanos: Option<u64>,
+    /// When the last /resume moved the VM back to RUNNING — the sampler
+    /// counts from here, not from its pre-suspend sample.
+    resumed_at: Option<std::time::Instant>,
 }
 
 impl Usage {
@@ -61,7 +64,6 @@ impl Usage {
                     running_seconds: 0.0,
                     burst_vcpu_seconds: 0.0,
                     burst_gib_seconds: 0.0,
-                    suspend_seconds: 0.0,
                     resumes: 0,
                     suspends: 0,
                     suspend_count: 0,
@@ -70,6 +72,7 @@ impl Usage {
                 },
                 last_cpu_usec: None,
                 suspend_started_nanos: None,
+                resumed_at: None,
             }),
             running: AtomicBool::new(false),
             cgroup: cgroup_path
@@ -95,12 +98,15 @@ impl Usage {
         self.running.store(false, Ordering::Relaxed);
     }
 
-    /// Returns the wall-clock seconds spent suspended (clock-skew tolerant:
-    /// negative deltas are clamped to zero and reported by the caller).
+    /// Returns the wall-clock seconds spent suspended. A wall clock that
+    /// stepped backwards clamps the delta to zero without a report; the
+    /// caller reports only implausibly long intervals (over a day).
     pub async fn mark_resume(&self) -> f64 {
         let mut g = self.inner.lock().await;
         g.snapshot.resumes += 1;
-        self.running.store(true, Ordering::Relaxed);
+        if !self.running.swap(true, Ordering::Relaxed) {
+            g.resumed_at = Some(std::time::Instant::now());
+        }
         // No open interval (retry / forged /resume): count the resume but
         // do NOT record a bogus 0s histogram observation.
         let Some(t0) = g.suspend_started_nanos.take() else {
@@ -124,7 +130,7 @@ impl Usage {
     }
 
     /// Close an open suspend interval — /terminate can arrive while the VM
-    /// is suspended, which would otherwise leave suspend_seconds uncounted.
+    /// is suspended, which would otherwise leave that interval uncounted.
     pub async fn finalize(&self) {
         let mut g = self.inner.lock().await;
         if let Some(t0) = g.suspend_started_nanos.take() {
@@ -214,10 +220,21 @@ impl Usage {
                     last = std::time::Instant::now();
                     continue;
                 }
-                let now = std::time::Instant::now();
-                let dt = now.saturating_duration_since(last).as_secs_f64();
-                last = now;
                 let mut g = u.inner.lock().await;
+                let now = std::time::Instant::now();
+                // A /resume since the previous sample: nothing before it
+                // was RUNNING, and a snapshot restore may carry the
+                // monotonic clock through the whole suspension. Count from
+                // the resume and take a fresh CPU baseline.
+                let from = match g.resumed_at.take() {
+                    Some(r) if r > last => {
+                        g.last_cpu_usec = None;
+                        r
+                    }
+                    _ => last,
+                };
+                let dt = now.saturating_duration_since(from).as_secs_f64();
+                last = now;
                 g.snapshot.running_seconds += dt;
 
                 if let Some(cpu_usec) = u.read_cpu_usec() {
@@ -263,7 +280,6 @@ impl Usage {
 }
 
 fn record_suspend_observation(snap: &mut UsageSnapshot, secs: f64) {
-    snap.suspend_seconds += secs;
     snap.suspend_count += 1;
     snap.suspend_sum += secs;
     // Per-bucket count — OTLP requires sum(bucketCounts) == count.
@@ -315,7 +331,7 @@ mod tests {
         let s = u.snapshot().await;
         assert_eq!(s.suspends, 1);
         assert_eq!(s.resumes, 1);
-        assert!(s.suspend_seconds >= 0.005);
+        assert!(s.suspend_sum >= 0.005);
     }
 
     #[test]
@@ -324,7 +340,6 @@ mod tests {
             running_seconds: 0.0,
             burst_vcpu_seconds: 0.0,
             burst_gib_seconds: 0.0,
-            suspend_seconds: 0.0,
             resumes: 0,
             suspends: 0,
             suspend_count: 0,
@@ -348,6 +363,33 @@ mod tests {
                 assert_eq!(*c, 0, "bucket {i} must be empty");
             }
         }
+    }
+
+    /// A frozen VM runs no sampler tick, yet a restore may carry the
+    /// monotonic clock through the suspension — the first sample after
+    /// /resume must not charge that gap as RUNNING time.
+    #[tokio::test]
+    async fn suspended_time_never_counts_as_running() {
+        let u = Usage::new(Some("/nonexistent"), 1.0, 2.0);
+        u.set_running(true);
+        let otlp = Arc::new(crate::telemetry::OtlpSender::new(
+            "http://127.0.0.1:9".into(),
+            Duration::from_millis(10),
+        ));
+        u.spawn_sampler(Duration::from_millis(20), otlp, Duration::from_secs(3600));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        u.mark_suspend().await;
+        let before = u.snapshot().await.running_seconds;
+        // Block the current-thread runtime: no tick runs, as in a frozen
+        // VM, while the monotonic clock keeps moving.
+        std::thread::sleep(Duration::from_secs(1));
+        u.mark_resume().await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let gained = u.snapshot().await.running_seconds - before;
+        assert!(
+            gained < 0.5,
+            "suspended time counted as running: +{gained}s"
+        );
     }
 
     #[tokio::test]

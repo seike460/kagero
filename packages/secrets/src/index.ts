@@ -23,9 +23,6 @@ const defaultFetch: SecretFetcher = async (secretId) => {
   sharedClient ??= new SecretsManagerClient({});
   const out = await sharedClient.send(new GetSecretValueCommand({ SecretId: secretId }));
   if (out.SecretString !== undefined) return out.SecretString;
-  // SecretBinary arrives base64-decoded bytes — match the agent's
-  // contract (crates/kagero-agent/src/secrets.rs): UTF-8 text, fatal
-  // on non-UTF8 rather than a re-encoded base64 string.
   if (out.SecretBinary) {
     return secretBinaryText(out.SecretBinary);
   }

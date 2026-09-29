@@ -1,7 +1,8 @@
 {
   "name": "@kagero/k6-runner",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {
@@ -12,7 +13,8 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "!src/**/*.test.ts"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

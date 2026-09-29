@@ -120,7 +120,7 @@ groups:
             - id: failed
               value: failed
               stability: development
-              brief: Relay failed (connect refused, timeout, non-2xx).
+              brief: Relay failed (timeout, dropped request, non-2xx).
         stability: development
         brief: Outcome of relaying a hook to the app, on lifecycle event records.
         annotations:
@@ -150,13 +150,15 @@ groups:
             - id: timeout
               value: timeout
               stability: development
+              brief: The app did not answer within the hook budget.
             - id: error
               value: error
               stability: development
+              brief: The app answered non-2xx or dropped the request, or the hook body was invalid.
             - id: unimplemented
               value: unimplemented
               stability: development
-              brief: The app returned 404; treated as not implemented.
+              brief: The app returned 404 or does not listen on the app hook port; treated as not implemented.
         stability: development
         brief: Outcome of a relayed hook.
         annotations:

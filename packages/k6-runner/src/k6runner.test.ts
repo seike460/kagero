@@ -1,9 +1,32 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type RequestListener } from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { postRunAnnotation } from "./annotations.js";
 import { baseMetricName, EmfEncoder, k6JsonToEmf } from "./emf.js";
-import { outputFromEnv } from "./index.js";
+import { handlerFromEnv, outputFromEnv, type ShardEvent } from "./index.js";
 import { k6Args, k6OtelEnv, type RunShardInput, runShard } from "./runner.js";
 import { waitForStart } from "./schedule.js";
 import { planShards, shardSpec } from "./shard.js";
+
+/** Local HTTP server for the real-fetch paths; close() also drops
+ *  connections the handler left open. */
+async function listen(handler: RequestListener) {
+  const server = createServer(handler);
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: () => {
+      server.closeAllConnections();
+      return new Promise<void>((r) => server.close(() => r()));
+    },
+  };
+}
 
 /** Index-or-throw — keeps tests free of non-null assertions. */
 function at<T>(arr: readonly T[], i: number): T {
@@ -74,6 +97,23 @@ describe("waitForStart", () => {
   it("rejects schedules beyond the forward bound", async () => {
     const c = fakeClock(0);
     await expect(waitForStart(1000, c, 500)).rejects.toThrow(/beyond/);
+  });
+
+  it("keeps the default bound under the 15-minute Lambda timeout", async () => {
+    await expect(waitForStart(11 * 60_000, fakeClock(0))).rejects.toThrow(/beyond/);
+    await expect(waitForStart(9 * 60_000, fakeClock(0))).resolves.toMatchObject({
+      waitedMs: 9 * 60_000,
+    });
+  });
+
+  it("rejects a missing or non-numeric startAtMs without waiting", async () => {
+    const sleep = vi.fn(async () => {});
+    for (const bad of [undefined, Number.NaN, Number.POSITIVE_INFINITY, "1750000000000"]) {
+      await expect(waitForStart(bad as unknown as number, { now: () => 0, sleep })).rejects.toThrow(
+        /finite epoch-ms/,
+      );
+    }
+    expect(sleep).not.toHaveBeenCalled();
   });
 });
 
@@ -200,8 +240,28 @@ describe("EmfEncoder", () => {
   });
 });
 
+// A stand-in for the worker's code: LAMBDA_TASK_ROOT points here for the
+// whole file, and the scripts the tests name exist under it. tmpdir() is
+// a symlink on macOS (/var → /private/var), so k6 gets the real path.
+const TASK_ROOT = mkdtempSync(join(tmpdir(), "kagero-k6-task-"));
+const OUTSIDE = mkdtempSync(join(tmpdir(), "kagero-k6-outside-"));
+mkdirSync(join(TASK_ROOT, "k6"));
+writeFileSync(join(TASK_ROOT, "script.js"), "");
+writeFileSync(join(TASK_ROOT, "k6", "test.js"), "");
+writeFileSync(join(OUTSIDE, "evil.js"), "");
+symlinkSync(join(OUTSIDE, "evil.js"), join(TASK_ROOT, "link.js"));
+const REAL_TASK_ROOT = realpathSync(TASK_ROOT);
+beforeAll(() => {
+  vi.stubEnv("LAMBDA_TASK_ROOT", TASK_ROOT);
+});
+afterAll(() => {
+  vi.unstubAllEnvs();
+  rmSync(TASK_ROOT, { recursive: true, force: true });
+  rmSync(OUTSIDE, { recursive: true, force: true });
+});
+
 const BASE_INPUT: RunShardInput = {
-  scriptPath: "/opt/script.js",
+  scriptPath: "script.js",
   runId: "run-1",
   shardIndex: 1,
   shardCount: 3,
@@ -217,7 +277,54 @@ describe("k6Args", () => {
     expect(joined).toContain("--execution-segment-sequence 0,1/3,2/3,1");
     expect(joined).toContain("--tag run_id=run-1");
     expect(joined).toContain("--tag shard_id=1");
-    expect(args.at(-1)).toBe("/opt/script.js");
+    expect(args.slice(-2)).toEqual(["--", join(REAL_TASK_ROOT, "script.js")]);
+  });
+
+  it("accepts only a script inside the worker", () => {
+    for (const bad of [
+      "https://evil.example/x.js",
+      "http://h/x.js",
+      "HTTPS://h/x.js",
+      "-",
+      "",
+      undefined,
+      // Files that exist, but outside the function code and the layers.
+      join(OUTSIDE, "evil.js"),
+      "/tmp",
+      "../",
+      relative(TASK_ROOT, join(OUTSIDE, "evil.js")), // ../kagero-k6-outside-*/evil.js
+      pathToFileURL(join(OUTSIDE, "evil.js")).href,
+      "link.js", // a symlink inside that leads outside
+      "missing.js",
+      "k6", // a directory
+      ".",
+    ]) {
+      expect(() => k6Args({ ...BASE_INPUT, scriptPath: bad as string })).toThrow(/scriptPath/);
+    }
+    const inside = join(REAL_TASK_ROOT, "k6", "test.js");
+    for (const ok of [
+      "k6/test.js",
+      "./k6/../k6/test.js",
+      join(TASK_ROOT, "k6", "test.js"),
+      pathToFileURL(join(TASK_ROOT, "k6", "test.js")).href,
+    ]) {
+      expect(k6Args({ ...BASE_INPUT, scriptPath: ok }).at(-1)).toBe(inside);
+    }
+  });
+
+  it("keeps extraArgs from swapping in a script of their own", () => {
+    // Verified on k6 v2.3.0: `<url> --user-agent <path>` runs the URL,
+    // while `<url> --user-agent -- <path>` fails with two positionals.
+    const args = k6Args({
+      ...BASE_INPUT,
+      extraArgs: ["https://evil.example/x.js", "--user-agent"],
+    });
+    expect(args.slice(-4)).toEqual([
+      "https://evil.example/x.js",
+      "--user-agent",
+      "--",
+      join(REAL_TASK_ROOT, "script.js"),
+    ]);
   });
 
   it("uses -o opentelemetry for otlp output", () => {
@@ -269,6 +376,14 @@ describe("k6OtelEnv", () => {
 });
 
 describe("runShard", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "kagero-k6-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
   function fakeDeps(nowRef: { t: number }) {
     return {
       clock: {
@@ -290,7 +405,7 @@ describe("runShard", () => {
         shardIndex: 0,
         shardCount: 2,
         output: { kind: "emf", namespace: "kagero/k6" },
-        jsonOutPath: "/tmp/k6-out.json",
+        jsonOutPath: join(dir, "k6-out.json"),
       },
       {
         ...fakeDeps(now),
@@ -315,7 +430,7 @@ describe("runShard", () => {
 
   it("returns the exit code when k6 dies before writing the json file", async () => {
     const r = await runShard(
-      { ...BASE_INPUT, output: { kind: "emf" }, jsonOutPath: "/tmp/none.json" },
+      { ...BASE_INPUT, output: { kind: "emf" }, jsonOutPath: join(dir, "none.json") },
       {
         clock: { now: () => 4999, sleep: async () => {} },
         spawn: async () => ({ code: 108, stdout: "", stderr: "script error" }),
@@ -330,12 +445,40 @@ describe("runShard", () => {
     expect(r.emfSkipped).toBe(1);
   });
 
+  it("never re-emits the json file a previous shard left behind", async () => {
+    const jsonOutPath = join(dir, "k6-out.json");
+    // A warm execution environment keeps /tmp from the last invocation.
+    await writeFile(jsonOutPath, `${at(K6_LINES, 1)}\n`);
+    const emitted: string[] = [];
+    const r = await runShard(
+      { ...BASE_INPUT, output: { kind: "emf" }, jsonOutPath },
+      {
+        clock: { now: () => 4999, sleep: async () => {} },
+        // k6 fails to compile the script and never opens its output.
+        spawn: async () => ({ code: 107, stdout: "", stderr: "could not initialize" }),
+        emit: (l) => emitted.push(l),
+      },
+    );
+    expect(r.exitCode).toBe(107);
+    expect(r.emfLines).toBe(0);
+    expect(emitted).toEqual([]);
+  });
+
   it("refuses extra tags that smuggle forbidden metric labels", () => {
     expect(() => k6Args({ ...BASE_INPUT, extraTags: { "kagero.tenant.id": "x" } })).toThrow(
       /forbidden/,
     );
     expect(() => k6Args({ ...BASE_INPUT, extraTags: { tenant_id: "x" } })).toThrow(/forbidden/);
     expect(() => k6Args({ ...BASE_INPUT, extraTags: { method: "GET" } })).not.toThrow();
+  });
+
+  it("fails before spawning k6 when startAtMs is missing", async () => {
+    const spawn = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
+    const { startAtMs: _omit, ...noStart } = BASE_INPUT;
+    await expect(
+      runShard(noStart as RunShardInput, { clock: { now: () => 0, sleep: async () => {} }, spawn }),
+    ).rejects.toThrow(/startAtMs/);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("reports lateness as skew when already past startAtMs", async () => {
@@ -353,6 +496,25 @@ describe("runShard", () => {
       spawn: async () => ({ code: 99, stdout: "", stderr: "thresholds failed" }),
     });
     expect(r.exitCode).toBe(99);
+  });
+
+  it("keeps the k6 result when the annotation POST fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const r = await runShard(
+        { ...BASE_INPUT, grafana: { endpoint: "https://g.example.com", token: "t" } },
+        {
+          clock: { now: () => 5000, sleep: async () => {} },
+          spawn: async () => ({ code: 0, stdout: "", stderr: "" }),
+          fetchImpl: async () => {
+            throw new Error("getaddrinfo ENOTFOUND");
+          },
+        },
+      );
+      expect(r.exitCode).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("posts a region annotation when grafana is configured", async () => {
@@ -410,5 +572,216 @@ describe("outputFromEnv", () => {
       KAGERO_OTLP_ENDPOINT: "h:4318",
     } as NodeJS.ProcessEnv);
     expect(o).toMatchObject({ kind: "otlp", exporterType: "http", endpoint: "h:4318" });
+  });
+});
+
+describe("postRunAnnotation", () => {
+  const RUN = { startMs: 1000, endMs: 2000, runId: "r", shardCount: 2 };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("gives up on a Grafana that accepts the POST and never answers", async () => {
+    const grafana = await listen(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await postRunAnnotation({ endpoint: grafana.url, token: "t", timeoutMs: 100 }, RUN);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("grafana annotation POST failed"));
+    } finally {
+      await grafana.close();
+    }
+  });
+
+  it("warns and resolves when Grafana answers with an error status", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(
+      postRunAnnotation({ endpoint: "https://g.example.com", token: "t" }, RUN, async () => ({
+        ok: false,
+        status: 503,
+      })),
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith("grafana annotation POST failed: HTTP 503");
+  });
+
+  it("warns and resolves when the request itself fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(
+      postRunAnnotation({ endpoint: "https://g.example.com", token: "t" }, RUN, async () => {
+        // The shape of fetch's own connect failure.
+        const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:3000"), {
+          code: "ECONNREFUSED",
+        });
+        throw new TypeError("fetch failed", { cause });
+      }),
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith("grafana annotation POST failed: TypeError (ECONNREFUSED)");
+  });
+
+  it("keeps the Grafana URL out of the warning when fetch fails", async () => {
+    // fetch quotes the whole URL when it refuses userinfo or cannot
+    // parse it; tokens sit in the userinfo, the path and the query.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const endpoint of [
+      "https://admin:pw-tok@g.example.com/path-tok?q=query-tok",
+      "g.example.com/path-tok?q=query-tok",
+    ]) {
+      await expect(postRunAnnotation({ endpoint, token: "t" }, RUN)).resolves.toBeUndefined();
+    }
+    const lines = warn.mock.calls.map((c) => String(c[0]));
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      for (const t of ["pw-tok", "path-tok", "query-tok"]) {
+        expect(line, `${t} leaked`).not.toContain(t);
+      }
+    }
+    expect(lines).toEqual([
+      "grafana annotation POST failed: TypeError",
+      "grafana annotation POST failed: TypeError (ERR_INVALID_URL)",
+    ]);
+  });
+
+  it("drops trailing slashes before /api/annotations, keeping a prefix path", async () => {
+    const urls: string[] = [];
+    await postRunAnnotation(
+      { endpoint: "https://g.example.com/grafana//", token: "t" },
+      RUN,
+      async (u) => {
+        urls.push(u);
+        return { ok: true, status: 200 };
+      },
+    );
+    expect(urls).toEqual(["https://g.example.com/grafana/api/annotations"]);
+  });
+
+  it("bounds the POST with a timeout signal by default", async () => {
+    let signal: AbortSignal | undefined;
+    await postRunAnnotation(
+      { endpoint: "https://g.example.com", token: "t" },
+      RUN,
+      async (_u, i) => {
+        signal = i.signal;
+        return { ok: true, status: 200 };
+      },
+    );
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
+  });
+});
+
+describe("handlerFromEnv", () => {
+  // `true` stands in for k6, so the real spawn and fetch paths run.
+  const EVENT: ShardEvent = {
+    scriptPath: "k6/test.js",
+    runId: "run-9",
+    shardIndex: 0,
+    shardCount: 2,
+    startAtMs: 0,
+    backend: "collector",
+    k6Bin: "true",
+  };
+
+  it("posts one annotation per run, from shard 0 only", async () => {
+    const posts: { auth?: string; tags: string[] }[] = [];
+    const grafana = await listen((req, res) => {
+      let body = "";
+      req.on("data", (d: Buffer) => {
+        body += d.toString();
+      });
+      req.on("end", () => {
+        const { tags } = JSON.parse(body) as { tags: string[] };
+        posts.push({ auth: req.headers.authorization, tags });
+        res.end("{}");
+      });
+    });
+    try {
+      const handler = handlerFromEnv({
+        KAGERO_GRAFANA_URL: grafana.url,
+        KAGERO_GRAFANA_TOKEN: "t",
+      } as NodeJS.ProcessEnv);
+      const startAtMs = Date.now();
+      // Every item carries annotate — e.g. merged in from shardInput.
+      const results = await Promise.all(
+        [0, 1].map((shardIndex) => handler({ ...EVENT, startAtMs, shardIndex, annotate: true })),
+      );
+      expect(results.map((r) => r.exitCode)).toEqual([0, 0]);
+      expect(posts).toEqual([{ auth: "Bearer t", tags: ["kagero", "k6", "run:run-9"] }]);
+    } finally {
+      await grafana.close();
+    }
+  });
+
+  it("refuses a KAGERO_GRAFANA_URL of the wrong shape at init, without its value", () => {
+    // Tokens sit in the userinfo, the path, the query and the fragment.
+    for (const url of [
+      "https://g.example.com/path-tok?q=query-tok",
+      "https://g.example.com/path-tok?",
+      "https://g.example.com/path-tok#frag-tok",
+      "https://admin:pw-tok@g.example.com/path-tok",
+      "https://@g.example.com/path-tok",
+      "g.example.com/path-tok",
+      "ftp://g.example.com/path-tok",
+      "https:///path-tok",
+      "https:g.example.com/path-tok",
+      "https://g.example.com/path-tok ",
+      "https://g.example.com/path-tok\n",
+      "https://g.example.com:99999/path-tok",
+    ]) {
+      let msg = "";
+      try {
+        handlerFromEnv({ KAGERO_GRAFANA_URL: url } as NodeJS.ProcessEnv);
+      } catch (e) {
+        msg = String(e);
+      }
+      expect(msg, url).toBe(
+        "Error: KAGERO_GRAFANA_URL must be an absolute http:// or https:// URL with a host, " +
+          "and no query, fragment, userinfo or whitespace",
+      );
+    }
+    // Empty means unset, as for the annotation itself.
+    expect(() => handlerFromEnv({ KAGERO_GRAFANA_URL: "" } as NodeJS.ProcessEnv)).not.toThrow();
+  });
+
+  it("posts under a prefix path given with a trailing slash", async () => {
+    const paths: (string | undefined)[] = [];
+    const grafana = await listen((req, res) => {
+      paths.push(req.url);
+      req.resume();
+      req.on("end", () => res.end("{}"));
+    });
+    try {
+      const handler = handlerFromEnv({
+        KAGERO_GRAFANA_URL: `${grafana.url}/grafana/`,
+        KAGERO_GRAFANA_TOKEN: "t",
+      } as NodeJS.ProcessEnv);
+      const r = await handler({ ...EVENT, startAtMs: Date.now(), annotate: true });
+      expect(r.exitCode).toBe(0);
+      expect(paths).toEqual(["/grafana/api/annotations"]);
+    } finally {
+      await grafana.close();
+    }
+  });
+
+  it("posts nothing without annotate or without a Grafana token", async () => {
+    let posts = 0;
+    const grafana = await listen((_req, res) => {
+      posts++;
+      res.end("{}");
+    });
+    try {
+      const startAtMs = Date.now();
+      await handlerFromEnv({
+        KAGERO_GRAFANA_URL: grafana.url,
+        KAGERO_GRAFANA_TOKEN: "t",
+      } as NodeJS.ProcessEnv)({ ...EVENT, startAtMs });
+      await handlerFromEnv({ KAGERO_GRAFANA_URL: grafana.url } as NodeJS.ProcessEnv)({
+        ...EVENT,
+        startAtMs,
+        annotate: true,
+      });
+      expect(posts).toBe(0);
+    } finally {
+      await grafana.close();
+    }
   });
 });

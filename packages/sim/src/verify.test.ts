@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OtlpCapture } from "./mock-otlp.js";
-import { forbiddenMetricKeys, metricAttrKeys, nonMonotonicSumNames } from "./verify.js";
+import {
+  forbiddenMetricKeys,
+  hookStatuses,
+  metricAttrKeys,
+  nonMonotonicSumNames,
+} from "./verify.js";
 
 const cap = (body: unknown): OtlpCapture => ({ path: "/v1/metrics", body });
 
@@ -102,5 +107,50 @@ describe("metricAttrKeys", () => {
       }).body,
     );
     expect(keys.sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("reads the datapoints of every metric data kind", () => {
+    const metric = (kind: string, key: string) => ({
+      name: key,
+      [kind]: { dataPoints: [{ attributes: [{ key }] }] },
+    });
+    const keys = metricAttrKeys({
+      resourceMetrics: [
+        {
+          scopeMetrics: [
+            {
+              metrics: [
+                metric("gauge", "g"),
+                metric("histogram", "h"),
+                metric("exponentialHistogram", "e"),
+                metric("summary", "s"),
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(keys.sort()).toEqual(["e", "g", "h", "s"]);
+  });
+});
+
+describe("hookStatuses", () => {
+  it("returns the status of each hook-result datapoint for one hook", () => {
+    const point = (hook: string, status: string) => ({
+      attributes: [
+        { key: "kagero.hook.name", value: { stringValue: hook } },
+        { key: "kagero.hook.status", value: { stringValue: status } },
+      ],
+    });
+    const metric = (name: string, ...dataPoints: unknown[]) =>
+      cap({ resourceMetrics: [{ scopeMetrics: [{ metrics: [{ name, sum: { dataPoints } }] }] }] });
+    const captures = [
+      metric("kagero.microvm.hook_results", point("suspend", "unimplemented")),
+      metric("kagero.microvm.hook_results", point("resume", "ok"), point("suspend", "timeout")),
+      metric("other", point("suspend", "error")),
+    ];
+    expect(hookStatuses(captures, "suspend")).toEqual(["unimplemented", "timeout"]);
+    expect(hookStatuses(captures, "resume")).toEqual(["ok"]);
+    expect(hookStatuses(captures, "run")).toEqual([]);
   });
 });

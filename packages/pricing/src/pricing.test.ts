@@ -91,14 +91,70 @@ describe("findPrice", () => {
   });
 
   it("effectiveFrom boundary is inclusive", () => {
-    const e = findPrice("microvm", "us-east-1", "arm64", new Date("2026-06-09"));
+    const e = findPrice("microvm", "us-east-1", "arm64", new Date("2026-06-22"));
     expect(e?.prices.memoryGbSecond).toBe(0.0000036667);
   });
 
-  it("exact region beats wildcard", () => {
+  it("prices no microvm before the 2026-06-22 launch", () => {
+    for (const region of ["us-east-1", "ap-northeast-1"]) {
+      expect(findPrice("microvm", region, "arm64", new Date("2026-06-21T23:59:59Z"))).toBeNull();
+    }
+  });
+
+  it("finds the unverified ap-northeast-1 microvm entry", () => {
     const e = findPrice("microvm", "ap-northeast-1", "arm64");
     expect(e?.region).toBe("ap-northeast-1");
     expect(e?.verified).toBe(false);
+  });
+
+  // The wildcard entry comes first and is the newest, so only the
+  // exactness ranking can pick an exact one.
+  const tiered = {
+    version: 99,
+    currency: "USD",
+    entries: [
+      {
+        service: "lambda" as const,
+        region: "*",
+        arch: "*",
+        effectiveFrom: "2026-01-01",
+        verified: true,
+        source: "wildcard",
+        prices: { request: 3 },
+      },
+      {
+        service: "lambda" as const,
+        region: "ap-northeast-1",
+        arch: "*",
+        effectiveFrom: "2025-01-01",
+        verified: true,
+        source: "exact region",
+        prices: { request: 2 },
+      },
+      {
+        service: "lambda" as const,
+        region: "ap-northeast-1",
+        arch: "arm64",
+        effectiveFrom: "2024-01-01",
+        verified: true,
+        source: "exact region and arch",
+        prices: { request: 1 },
+      },
+    ],
+  };
+  const asOf = new Date("2026-06-01");
+
+  it("exact region beats wildcard", () => {
+    expect(findPrice("lambda", "ap-northeast-1", "x86_64", asOf, tiered)?.source).toBe(
+      "exact region",
+    );
+    expect(findPrice("lambda", "eu-west-1", "x86_64", asOf, tiered)?.source).toBe("wildcard");
+  });
+
+  it("exact region and arch beat a single exact match", () => {
+    expect(findPrice("lambda", "ap-northeast-1", "arm64", asOf, tiered)?.source).toBe(
+      "exact region and arch",
+    );
   });
 });
 

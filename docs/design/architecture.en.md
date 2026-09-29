@@ -1,9 +1,9 @@
 # kagero — Overall design
 
-> English translation of [architecture.md](architecture.md) (Japanese is canonical). Last synced: 2026-09-27.
+> English translation of [architecture.md](architecture.md) (Japanese is canonical). Last synced: 2026-09-29.
 
 - Status: implementation is ahead of this document (deviation recorded in [ADR-012](../decisions.en.md)). The design will be finalized based on PoC results.
-- Last updated: 2026-09-26
+- Last updated: 2026-09-29
 - Related documents: [MicroVMs design](microvms.en.md) / [Functions, Durable, and k6 design](functions-durable-k6.en.md) / [ADR](../decisions.en.md) / [Roadmap](../roadmap.en.md) / [PoC](../poc/README.en.md) / [Research (Japanese)](../research/2026-09-landscape.md)
 
 ## 1. Goals and non-goals
@@ -59,28 +59,31 @@ Implementation is ahead of the docs ([ADR-012](../decisions.en.md)); this is the
 
 ```text
 kagero/
+├── .github/workflows/        # CI (ci.yml) and releases (release.yml)
 ├── crates/
-│   └── kagero-agent/         # MicroVM の中で動くエージェント（唯一の Rust 部品）
-├── packages/                 # pnpm workspace（TypeScript）
-│   ├── semconv/              # 属性の定数と文書の生成器（Weaver 互換スキーマの YAML が正本）
-│   ├── secrets/              # Secrets Manager の ARN 解決（durable-stitcher / k6-runner 共用）
-│   ├── pricing/              # 単価表とコストの計算式
-│   ├── dashboards/           # ダッシュボードとアラートの仕様、バックエンド別の adapter
-│   ├── sim/                  # フックの simulator（E2E 用）
-│   ├── durable-stitcher/     # モジュール D の Lambda
-│   ├── k6-runner/            # モジュール C の Lambda
+│   └── kagero-agent/         # Agent that runs inside the MicroVM (the only Rust component)
+├── docker/                   # OCI image of the agent (agent.Dockerfile; published to GHCR)
+├── packages/                 # pnpm workspace (TypeScript)
+│   ├── semconv/              # Generator for attribute constants and docs (the Weaver-compatible schema YAML is canonical)
+│   ├── secrets/              # Secrets Manager ARN resolution (shared by durable-stitcher / k6-runner)
+│   ├── pricing/              # Price tables and cost formulas
+│   ├── dashboards/           # Dashboard and alert specs, per-backend adapters
+│   ├── sim/                  # Hook simulator (for E2E)
+│   ├── durable-stitcher/     # Module D Lambda
+│   ├── k6-runner/            # Module C Lambda
 │   └── cdk/                  # CDK constructs
-├── semconv/registry/         # 属性の定義（Weaver 互換スキーマの YAML）
+├── semconv/registry/         # Attribute definitions (Weaver-compatible schema YAML)
 ├── collector/
-│   ├── alloy/                # LGTM 向けの Alloy（river）テンプレート
-│   ├── lgtm/                 # LGTM 向けの OTel collector テンプレート
-│   ├── cloudwatch/           # CloudWatch 向けの収集器の設定
-│   └── rotel/                # Rotel での代替設定
-├── generated/                # 生成して commit するダッシュボードとアラート
+│   ├── alloy/                # Alloy (river) template for LGTM
+│   ├── lgtm/                 # OTel Collector template for LGTM
+│   ├── cloudwatch/           # Collector config for CloudWatch
+│   └── rotel/                # Alternative configs for Rotel
+├── generated/                # Dashboards and alerts, generated and committed
 │   ├── dashboards/{lgtm,cloudwatch}/
 │   └── alerts/{lgtm,cloudwatch}/
-├── examples/                 # Node.js・Python の MicroVM イメージ例
-└── docs/
+├── examples/                 # Node.js and Python MicroVM image examples
+└── docs/                     # Design, ADRs, roadmap, PoCs, research
+    └── reference/            # Attribute and metric reference (generated from semconv)
 ```
 
 ## 4. Languages and tools
@@ -93,12 +96,12 @@ Languages are split by where the code runs ([ADR-001](../decisions.en.md#adr-001
 | Outside (control Lambdas, CDK, dashboard generation, simulator) | TypeScript (Node.js 24) | CDK and the Grafana Foundation SDK are available in TypeScript. Control Lambdas are invoked rarely, so cold-start differences do not matter |
 
 Tools:
-- Rust: use `cargo fmt`, `cargo clippy -D warnings`, and `cargo test`. Produce a static ARM64 binary (`aarch64-unknown-linux-musl`). cargo-zigbuild is the candidate for cross-building.
+- Rust: use `cargo fmt`, `cargo clippy -D warnings`, and `cargo test`. Produce a static ARM64 binary (`aarch64-unknown-linux-musl`). The release build runs natively on an ARM64 runner with Alpine's Rust (musl) (`docker/agent.Dockerfile`); there is no cross-build.
 - Main Rust crates (already implemented): tokio, hyper, serde, reqwest (rustls), libc.
 - TypeScript: use strict mode, ES modules, Biome, vitest, and pnpm. Control Lambdas are deployed with CDK `NodejsFunction`.
 - Attribute definitions: the canonical source is a Weaver-compatible schema YAML; the generator in `packages/semconv` emits the Rust and TypeScript constants and the docs (a migration path to OpenTelemetry Weaver itself is kept).
-- Version pinning: pin tool versions with mise. Dependency updates are delegated to Renovate.
-- CI: GitHub Actions. Builds and tests run on ARM64 Linux runners (`ubuntu-24.04-arm`).
+- Version pinning: pin tool versions with mise. Dependency updates are to be delegated to Renovate; it is not set up yet, so updates are manual for now.
+- CI: GitHub Actions. Rust lint, tests and the MSRV check, and the build of the shipped image, run on ARM64 Linux runners (`ubuntu-24.04-arm`). The TypeScript checks, the simulator E2E and the generated-artifact diff run on `ubuntu-latest` (x86_64), so the E2E drives an agent built for x86_64.
 
 ## 5. Two backends
 
@@ -117,7 +120,7 @@ Points where behavior may differ (verified in [PoC-05 (Japanese)](../poc/05-back
 - Limits: CloudWatch PromQL is capped at 500 series per query and a 7-day range.
 - Histogram types and delta/cumulative temporality may be handled differently.
 - Cost: CloudWatch PromQL charges per sample scanned by API queries; Logs Insights charges per volume scanned.
-- Unverified: whether OTLP sends to CloudWatch Logs require a way to specify the log group (e.g., headers).
+- OTLP sends to CloudWatch Logs name the log group and log stream in the `x-aws-log-group` and `x-aws-log-stream` headers, and both must exist beforehand (per the AWS docs; not yet verified on real AWS).
 
 ## 6. Attributes and cardinality
 
@@ -151,7 +154,7 @@ A single specification generates outputs for both backends ([ADR-010](../decisio
 - Unsupported panels: a panel that cannot be produced on one backend becomes a text panel stating "not supported on this backend". Nothing is silently dropped.
 - Output: v1 JSON, because Amazon Managed Grafana 12.4 does not support schema v2. Grafana 13 migrates v1 automatically.
 - Location: generated artifacts are committed under `generated/`. CI regenerates them and verifies there is no diff.
-- Validation: snapshot tests plus PromQL/LogQL syntax checks; the syntax-check tooling is decided in PoC-05 and PoC-06.
+- Validation: for now, CI checks only the regeneration diff and a simple PromQL syntax check (balanced brackets, no empty selector). There is no LogQL or Logs Insights syntax check yet. The tooling for full syntax checks is decided in PoC-05 and PoC-06.
 - Distribution: JSON import, file provisioning, gcx, and Git Sync (Grafana 13) are supported. CDK-based distribution is considered for v0.5.
 - Query cost rules: refresh interval is at least 1 minute; high-cardinality panels are narrowed with `topk`; Logs Insights panels are placed in collapsed rows.
 
@@ -186,25 +189,28 @@ Assumption: apps inside MicroVMs may be untrusted code (e.g., AI-generated code)
 | Telemetry integrity | App forges identity attributes | Identity attributes are overwritten on the collector side. Received telemetry is treated as "self-reported" |
 | `runHookPayload` | Leaks into logs or records | The agent never logs it. Users are guided not to put secrets in it. Whether it ends up in CloudTrail is verified in PoC-01 |
 | Hook ports | Invoked from outside | Not included in the auth token's allowed ports. Unreachability from outside is verified in PoC-02. Admin and OTLP ports are loopback-only |
+| Hook port | App connects to the MicroVM's own IP and sends forged hooks (`/run`, `/terminate`, etc.) | Remaining risk. With `KAGERO_HOOK_ALLOWED_PEERS` unset, kagero rejects only loopback peers. A forged `/terminate` makes kagero stop the app and the collector. When a forged `/run` succeeds first, the genuine `/run` is treated as a duplicate. Closing this needs the addresses Lambda sends hooks from in the allowlist; PoC-02 confirms those addresses |
+| Hook and admin ports | App binds them first and answers in kagero's place | kagero binds both ports before it starts the app |
+| OTLP ports (4318/4317) | App binds them before the collector and receives, then drops, kagero's usage and lifecycle records | Remaining risk. When the collector starts at `/run` (the default), the app that is already running can take the ports. The collector then fails to start, and a `child exited on its own` warning appears on stdout. When to start the collector is decided by PoC-03 and PoC-04 under ADR-005 |
 | The agent itself | Stopped by an ALL-privileged app | ALL privileges are opt-in for eBPF users only. The agent drops the app's privileges at startup |
-| Artifacts | Tampering | Signed with cosign and shipped with an SBOM. Dependency versions pinned |
+| Artifacts | Tampering | Dependency versions are pinned (`Cargo.lock` and `pnpm-lock.yaml`; the image builds with `cargo build --locked`). CI and release actions are pinned by commit SHA, and the build base image by digest. The published image carries only the SLSA provenance attestation that buildx adds. cosign signing and an SBOM are not in place yet (planned) |
 
 ## 10. Testing
 
 - Unit tests: `cargo test` for Rust, vitest for TypeScript.
-- E2E with the simulator: a TypeScript simulator invokes hooks in the same order as the real environment. Suspend and resume are approximated with `docker pause` and `docker unpause`. The destination is a `grafana/otel-lgtm` container; results are verified via the Loki, Tempo, and Prometheus HTTP APIs.
-- Simulator limits: `docker pause` does not reproduce memory snapshots. Snapshot-specific issues are covered by PoCs and contract tests.
-- Contract tests: the PoC procedures are re-run on AWS once a month. They are triggered manually with a budget cap.
-- Dashboard tests: regeneration diff, snapshots, and syntax checks run in CI.
+- E2E with the simulator: the TypeScript simulator (`packages/sim`) starts the real agent binary as a process and invokes hooks in the same order as the real environment. The destination is a mock OTLP receiver inside the simulator. Only when `KAGERO_SIM_COLLECTOR_BIN` points at otelcol-contrib does the telemetry pass through a real collector. In that mode, the shipped `collector/lgtm` and `collector/cloudwatch` templates also run in the real collector, rendered as the agent renders them, and a test checks that the identity attributes the app puts on the resource, the scope and the datapoints are gone at the receiver. The Alloy and Rotel templates do not run, because CI has neither binary. CI runs both.
+- Simulator limits: suspend and resume are plain hook calls. Nothing freezes the processes, and memory snapshots are not reproduced. Nothing is sent to a real backend (Loki, Tempo, Mimir, or CloudWatch) either. Snapshot-specific issues and how the data looks on each backend are covered by PoCs and contract tests. The `docker pause` / `docker unpause` approximation and an E2E that sends to a `grafana/otel-lgtm` container and checks the Loki, Tempo, and Prometheus HTTP APIs do not exist yet (planned).
+- Contract tests: the PoC procedures are re-run on AWS once a month. They are triggered manually with a budget cap. They start after the PoCs have run on real AWS.
+- Dashboard tests: the regeneration diff and a simple PromQL syntax check run in CI ([section 7](#7-dashboard-and-alert-specification)).
 
 ## 11. Releases and supply chain
 
 - Versioning: SemVer. During 0.x, the whole monorepo shares a single version.
 - Artifacts:
-  - The `kagero` binary (`aarch64-unknown-linux-musl`) is distributed via GitHub Releases.
-  - OCI images are distributed via GHCR; users pull the binary in with `COPY --from`.
-  - npm packages are published under `@seike460/` (CDK constructs and others from v0.5).
+  - The OCI image `ghcr.io/seike460/kagero` (linux/arm64) is distributed via GHCR. Pushing a `vX.Y.Z` tag makes release.yml publish it after every CI job passes and the tag matches the versions in the source. Users pull the binary in with `COPY --from`. This image is the only artifact published today.
+  - The `kagero` binary (`aarch64-unknown-linux-musl`) is also to be distributed via GitHub Releases. It is not attached yet.
+  - npm packages are to be published under `@seike460/` (CDK constructs and others from v0.5). The workspace packages are named `@kagero/*` today and are all private; they are renamed to `@seike460/` when published.
   - Dashboards are published on grafana.com (from v0.2).
-- Signing and SBOM: artifacts are signed with cosign (keyless signing via GitHub OIDC) and shipped with an SBOM.
+- Signing and SBOM: artifacts are to be signed with cosign (keyless signing via GitHub OIDC) and shipped with an SBOM. Neither is in place yet; the image carries only buildx's SLSA provenance attestation.
 - Dependency checks: the plan is to verify licenses and vulnerabilities for Rust with cargo-deny.
 - Bundled licenses: Alloy and OBI are Apache-2.0. k6 is AGPL-3.0, so it is bundled unmodified with a license notice.

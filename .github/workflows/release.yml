@@ -1,47 +1,84 @@
 name: release
 
 # Tag-triggered publish of the agent image to GHCR
-# (docs/roadmap.md: v0.1 ships ghcr.io/seike460/kagero). Semver tags
-# v0.1.0 produce image tags 0.1.0 and 0.1 — the short tag is what the
-# examples' `COPY --from=` references.
+# (docs/design/architecture.md §11: ghcr.io/seike460/kagero). A tag
+# v0.1.0 produces the image tags 0.1.0, 0.1 and latest — the short tag
+# is what the examples' `COPY --from=` references. latest comes from
+# metadata-action's default flavor (latest=auto). A pre-release tag such
+# as v0.2.0-rc.1 produces only 0.2.0-rc.1.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  # A tag publishes only a commit that passes the whole CI, whether or
+  # not CI finished for it on main.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  # The image tags come from the git tag alone; refuse a tag that does
+  # not match the version in the source (docs/roadmap.md: one version
+  # for the whole monorepo), or that points outside main — releases ship
+  # only what was merged through a PR (AGENTS.md).
+  version:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check the tagged commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Check the tag matches every version in the source
+        run: |
+          want=${GITHUB_REF_NAME#v}
+          cargo=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          echo "tag $want, Cargo.toml $cargo"
+          test "$cargo" = "$want"
+          for f in package.json packages/*/package.json; do
+            got=$(jq -r .version "$f")
+            echo "$f $got"
+            test "$got" = "$want"
+          done
+
   agent-image:
+    needs: [ci, version]
+    permissions:
+      contents: read
+      packages: write
     # ARM runner: MicroVM images are aarch64; the Alpine/musl build is
     # native here (no QEMU). Add linux/amd64 later if an amd64 MicroVM
     # base ever ships — the examples' base image dictates the arch.
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: docker/agent.Dockerfile

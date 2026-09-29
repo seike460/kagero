@@ -7,8 +7,9 @@
  * Agent binary: KAGERO_AGENT_BIN or the default target/debug/kagero.
  *
  * Prereq: `cargo build -p kagero-agent`. Exits non-zero when any check
- * fails. `docker pause/unpause` approximation arrives with the container
- * image (architecture.md §10); hook-only mode covers ordering + flush.
+ * fails. Hook-only: /suspend and /resume are plain hook calls — nothing
+ * freezes the processes (no `docker pause/unpause` approximation), so
+ * the run covers hook ordering + flush, not snapshot behaviour.
  */
 import { runE2E } from "./e2e.js";
 

@@ -45,29 +45,57 @@ MicroVM イメージです。本番の負荷には使いません。アプリが
 `otelcol.auth.basic` を持たないテンプレートに差し替えてください
 （`collector/README.md` 参照）。
 
-## ビルド
+## フックのポートについて
 
-`COPY --from=ghcr.io/seike460/kagero:0.1` は公開済みイメージを
-前提にします。v0.1 が出るまでは、エージェントをローカルで
-ビルドして context にコピーしてください
-（`cargo build --release && cp target/release/kagero kagero`）。
-その行を `COPY kagero /usr/local/bin/kagero` に置き換えます
-（`target/` は dockerignore されているため、バイナリは
-context のルートに置きます）。
+エージェントのフックのポートは、すべてのインターフェースで
+待ち受けます。`KAGERO_HOOK_ALLOWED_PEERS` を設定しないと、拒むのは
+loopback からの接続だけです。そのためアプリは、MicroVM 自身の IP に
+接続して、`/run` や `/terminate` などのフックを偽造できます。
+この危険は、Lambda がフックを送ってくるアドレスを PoC-02 で
+確かめるまで残ります。確かめたら、そのアドレスを許可リストに
+設定してください（`KageroMicrovmImage` では `hookAllowedPeers`）。
+
+## ビルド
 
 リポジトリのルートで実行します（収集器のテンプレートを context
 に含めるため）。
 
 ```sh
-docker build -f examples/node/Dockerfile -t kagero-example-node .
-docker build -f examples/python/Dockerfile -t kagero-example-python .
+docker build --platform linux/arm64 -f examples/node/Dockerfile -t kagero-example-node .
+docker build --platform linux/arm64 -f examples/python/Dockerfile -t kagero-example-python .
 ```
 
-収集器の Alloy は `grafana/alloy:v1.20.0` にピンしています。
-`KAGERO_OTLP_ENDPOINT_LGTM`（または `_CLOUDWATCH`）は実際の
+イメージは arm64 専用です。ベースの `al2023-minimal` も、
+エージェントのイメージ `ghcr.io/seike460/kagero:0.1` も、
+`linux/arm64` しか公開されていません。x86_64 のホストでは、
+QEMU によるエミュレーション（binfmt）が必要です。
+
+まだリリースしていないエージェントの変更を試すときは、
+リリース用の Dockerfile で arm64 の静的バイナリを作ります。
+バイナリは context のルートに `kagero` として出ます。そのうえで
+`COPY --from=ghcr.io/seike460/kagero:0.1` の行を
+`COPY kagero /usr/local/bin/kagero` に置き換えます。
+
+```sh
+docker build --platform linux/arm64 -f docker/agent.Dockerfile -o . .
+```
+
+（ホストで `cargo build` すると、ホスト向けのバイナリができます。
+macOS や x86_64 のホストで作ったものは、arm64 のイメージの中では
+動きません。）
+
+どちらのイメージも、収集器に `grafana/alloy:v1.20.0` と、LGTM 専用の
+Alloy テンプレートを使います。`KAGERO_OTLP_ENDPOINT_LGTM` は実際の
 エンドポイントに変えてください。`https://otlp.invalid` は
 分かりやすく失敗するプレースホルダーです。`localhost:4318` に
 すると、テレメトリが収集器自身の受信口にループします。
+CloudWatch に送るときは、収集器を入れ替えます。`otelcol-contrib` と
+`collector/cloudwatch/collector.yaml.tmpl` をコピーし、
+`KAGERO_BACKEND=cloudwatch` を設定します。`KAGERO_COLLECTOR_BIN` と
+`KAGERO_COLLECTOR_ARGS` も合わせて変えます（`collector/README.md` の
+起動契約を参照）。CloudWatch では、ロググループ・ログストリーム・
+実行ロールの権限も前もって用意します（`collector/README.ja.md` の
+「CloudWatch の前提」を参照）。
 
 ## デプロイ
 

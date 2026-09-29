@@ -14,8 +14,11 @@
  * for grpc/http exporters, exporter type selects which applies.
  */
 
-import { createReadStream } from "node:fs";
+import { createReadStream, realpathSync, statSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 import { METRIC_LABEL_FORBIDDEN } from "@kagero/semconv";
 import { type FetchLike, type GrafanaAnnotations, postRunAnnotation } from "./annotations.js";
 import { EmfEncoder } from "./emf.js";
@@ -62,7 +65,11 @@ export type OutputConfig =
     };
 
 export interface RunShardInput {
-  /** Path to the k6 script inside the worker. */
+  /** Path to the k6 script inside the worker: a file under the function
+   *  code (LAMBDA_TASK_ROOT, default /var/task — relative paths resolve
+   *  there) or under a layer (/opt), also as a file: URL. Anything else
+   *  is refused: a URL k6 would fetch (https://), "-" (stdin), or a path
+   *  or symlink that leads outside those roots (/tmp, ../). */
   scriptPath: string;
   runId: string;
   shardIndex: number;
@@ -79,7 +86,7 @@ export interface RunShardInput {
   extraTags?: Record<string, string>;
   /** Forward-schedule bound for waitForStart. */
   maxWaitMs?: number;
-  /** Temp path for the json file in emf mode. */
+  /** Temp path for the json file in emf mode (default /tmp/k6-out.json). */
   jsonOutPath?: string;
   /** When set, a start→end region annotation is posted. */
   grafana?: GrafanaAnnotations;
@@ -119,6 +126,14 @@ export interface RunShardResult {
   emfSkipped: number;
 }
 
+const DEFAULT_JSON_OUT_PATH = "/tmp/k6-out.json";
+
+/** Lambda's documented locations for the function code (the
+ *  LAMBDA_TASK_ROOT default) and for layers — both read-only at run
+ *  time, unlike /tmp. */
+const DEFAULT_TASK_ROOT = "/var/task";
+const LAYER_ROOT = "/opt";
+
 /** Default line source for the EMF path — streams the k6 json output
  *  one line at a time (the file scales with point count and can reach
  *  GBs; it must never sit whole in memory). */
@@ -127,8 +142,10 @@ async function* readJsonLines(path: string): AsyncIterable<string> {
   for await (const line of rl) yield line;
 }
 
-/** Build `k6 run` args for a shard — pure, for tests and review. */
+/** Build `k6 run` args for a shard, for tests and review. Its only I/O
+ *  is resolving scriptPath on disk. */
 export function k6Args(input: RunShardInput): string[] {
+  const scriptPath = workerScriptPath(input.scriptPath);
   const spec = shardSpec(input.shardIndex, input.shardCount);
   const args = [
     "run",
@@ -159,14 +176,52 @@ export function k6Args(input: RunShardInput): string[] {
       args.push("-o", "opentelemetry");
       break;
     case "emf":
-      args.push("--out", `json=${input.jsonOutPath ?? "/tmp/k6-out.json"}`);
+      args.push("--out", `json=${input.jsonOutPath ?? DEFAULT_JSON_OUT_PATH}`);
       break;
     case "json-file":
       args.push("--out", `json=${input.output.path}`);
       break;
   }
-  args.push(...(input.extraArgs ?? []), input.scriptPath);
+  // "--" pins scriptPath as the one positional: without it, extraArgs
+  // ending in a value flag (`<url> --user-agent`) turn the path into
+  // the flag's value and k6 runs the URL instead.
+  args.push(...(input.extraArgs ?? []), "--", scriptPath);
   return args;
+}
+
+/** k6 runs `-` from stdin and fetches https:// scripts, and a plain path
+ *  can point anywhere on disk (/tmp is writable at run time). Only a
+ *  file under the function code or a layer keeps the script to what the
+ *  worker ships. The check runs on the real path, after symlinks, and k6
+ *  gets that same path. */
+function workerScriptPath(p: string): string {
+  const taskRoot = process.env.LAMBDA_TASK_ROOT || DEFAULT_TASK_ROOT;
+  const refuse = () =>
+    new Error(
+      `scriptPath must be a file inside the worker (under ${taskRoot} or ${LAYER_ROOT}), ` +
+        `got ${JSON.stringify(p)}`,
+    );
+  if (typeof p !== "string" || p === "" || p === "-") throw refuse();
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(p)?.[1];
+  if (scheme !== undefined && scheme.toLowerCase() !== "file") throw refuse();
+  let real: string;
+  try {
+    real = realpathSync(scheme === undefined ? resolve(taskRoot, p) : fileURLToPath(p));
+    if (!statSync(real).isFile()) throw refuse();
+  } catch {
+    throw refuse();
+  }
+  for (const root of [taskRoot, LAYER_ROOT]) {
+    let realRoot: string;
+    try {
+      realRoot = realpathSync(root);
+    } catch {
+      continue;
+    }
+    const rel = relative(realRoot, real);
+    if (rel !== "" && !isAbsolute(rel) && rel.split(sep)[0] !== "..") return real;
+  }
+  throw refuse();
 }
 
 const FORBIDDEN_TAG_NAMES = new Set([
@@ -242,6 +297,11 @@ export async function runShard(
   if (input.output.kind === "emf" && input.output.namespace?.startsWith("AWS/")) {
     throw new Error("EMF namespace must not start with 'AWS/'");
   }
+  const jsonOutPath = input.jsonOutPath ?? DEFAULT_JSON_OUT_PATH;
+  // /tmp outlives the invocation in a warm execution environment, and a
+  // k6 that dies before initialising its output leaves the file as it
+  // was — the previous shard's points would go out under this run's ids.
+  if (input.output.kind === "emf") await rm(jsonOutPath, { force: true });
 
   const clock = deps.clock ?? systemClock;
   const { skewMs } = await waitForStart(input.startAtMs, clock, input.maxWaitMs);
@@ -273,7 +333,7 @@ export async function runShard(
     // (drained-but-unemitted lines are already gone by then anyway).
     let lines: AsyncIterable<string> | undefined;
     try {
-      lines = readLines(input.jsonOutPath ?? "/tmp/k6-out.json");
+      lines = readLines(jsonOutPath);
     } catch {
       emfSkipped++;
     }

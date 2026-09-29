@@ -106,7 +106,7 @@ export function lambdaApiFetcher(opts: { region?: string } = {}): HistoryFetcher
             "check the SDK version against the 2025-12-01 API",
         );
       }
-      const send = client.send as (cmd: unknown) => Promise<HistoryApiResponse>;
+      const send = client.send.bind(client) as (cmd: unknown) => Promise<HistoryApiResponse>;
       const all: HistoryApiResponse["Events"] = [];
       let marker: string | undefined;
       do {

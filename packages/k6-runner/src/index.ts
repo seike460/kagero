@@ -44,6 +44,24 @@ export interface ShardEvent {
  * - collector (MicroVM): OTLP to the in-MicroVM collector — it owns
  *   identity stamping and the SigV4 hop, so shards never see a CW
  *   endpoint or credentials.
+ *
+ *   env                         | backend    | value
+ *   ----------------------------|------------|------------------------------
+ *   KAGERO_OTLP_ENDPOINT        | lgtm       | required; host:port, no scheme
+ *   KAGERO_OTLP_EXPORTER_TYPE   | lgtm       | "grpc", else http/protobuf
+ *   KAGERO_OTLP_HTTP_URL_PATH   | lgtm       | http only; default /v1/metrics
+ *   KAGERO_OTLP_HEADERS         | lgtm       | "k1=v1,k2=v2"
+ *   KAGERO_OTLP_USERNAME        | lgtm       | http basic auth user
+ *   KAGERO_OTLP_PASSWORD        | lgtm       | http basic auth password
+ *   KAGERO_OTLP_INSECURE        | lgtm       | "true" turns TLS off
+ *   KAGERO_K6_METRIC_PREFIX     | lgtm       | K6_OTEL_METRIC_PREFIX
+ *   KAGERO_K6_EMF_NAMESPACE     | cloudwatch | default "kagero/k6"
+ *   KAGERO_COLLECTOR_OTLP       | collector  | default "127.0.0.1:4317"
+ *
+ * The endpoint and header values are k6's K6_OTEL_* formats. The agent
+ * and the durable stitcher take a URL under KAGERO_OTLP_ENDPOINT, and
+ * the stitcher reads KAGERO_OTLP_HEADER as "Name: value; ..." — a value
+ * copied from either one does not work here.
  */
 export function outputFromEnv(event: ShardEvent, env: NodeJS.ProcessEnv): OutputConfig {
   switch (event.backend) {
@@ -83,8 +101,37 @@ export function outputFromEnv(event: ShardEvent, env: NodeJS.ProcessEnv): Output
   }
 }
 
-/** Distributed Map worker handler — event per shard. */
+/**
+ * The GrafanaAnnotations.endpoint shape. "/api/annotations" is appended
+ * as text, so a query or fragment would come before it, fetch refuses
+ * userinfo, and whitespace that the URL parser trims from the value
+ * alone breaks the joined URL. The authority ends at / \ ? # as in the
+ * WHATWG parser; an "@" in it is userinfo, even an empty one.
+ */
+function isGrafanaBaseUrl(v: string): boolean {
+  const scheme = /^https?:\/\//i.exec(v);
+  const authority = scheme ? (v.slice(scheme[0].length).split(/[/\\?#]/, 1)[0] ?? "") : "";
+  if (authority === "" || authority.includes("@") || /[?#\s\p{Cc}]/u.test(v)) return false;
+  try {
+    return new URL(v).hostname !== "";
+  } catch {
+    return false;
+  }
+}
+
+/** Distributed Map worker handler — event per shard. KAGERO_GRAFANA_URL
+ *  and KAGERO_GRAFANA_TOKEN enable the run's region annotation. A
+ *  KAGERO_GRAFANA_URL of the wrong shape is a deployment error: it fails
+ *  the worker here, before k6 starts, with an error that names the
+ *  variable but not its value. A failed annotation POST still only
+ *  warns. */
 export function handlerFromEnv(env: NodeJS.ProcessEnv = process.env) {
+  if (env.KAGERO_GRAFANA_URL && !isGrafanaBaseUrl(env.KAGERO_GRAFANA_URL)) {
+    throw new Error(
+      "KAGERO_GRAFANA_URL must be an absolute http:// or https:// URL with a host, " +
+        "and no query, fragment, userinfo or whitespace",
+    );
+  }
   return async (event: ShardEvent): Promise<RunShardResult> => {
     const input: RunShardInput = {
       scriptPath: event.scriptPath,

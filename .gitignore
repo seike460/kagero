@@ -7,7 +7,7 @@ dist/
 coverage/
 *.tsbuildinfo
 
-# AWS CDK (cdk.context.json is intentionally tracked)
+# AWS CDK
 cdk.out/
 
 # Local environment and secrets

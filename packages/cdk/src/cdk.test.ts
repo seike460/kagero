@@ -2,9 +2,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { App, Stack } from "aws-cdk-lib";
+import {
+  App,
+  type CfnElement,
+  CfnParameter,
+  Stack,
+  aws_secretsmanager as secretsmanager,
+} from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { KageroDurableStitcher } from "./durable.js";
 import { KageroK6Run } from "./k6.js";
 import { KageroMicrovmImage, kageroEnvironment } from "./microvm.js";
@@ -14,13 +20,32 @@ const FIXTURE_ENTRY = path.join(
   "../test/fixture/handler.ts",
 );
 
+const outdirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of outdirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function makeStack(): { app: App; stack: Stack } {
   const outdir = fs.mkdtempSync(path.join(os.tmpdir(), "kagero-cdk-"));
+  outdirs.push(outdir);
   const app = new App({ outdir });
   const stack = new Stack(app, "TestStack", {
     env: { region: "us-east-1", account: "123456789012" },
   });
   return { app, stack };
+}
+
+type PolicyStatement = { Action: string | string[]; Resource: unknown };
+
+function policyStatements(t: Template): PolicyStatement[] {
+  return Object.values(t.findResources("AWS::IAM::Policy")).flatMap(
+    (p) => p.Properties.PolicyDocument.Statement as PolicyStatement[],
+  );
+}
+
+function findStatement(t: Template, action: string): PolicyStatement | undefined {
+  return policyStatements(t).find((s) => ([] as string[]).concat(s.Action).includes(action));
 }
 
 const baseKagero = () => ({ backend: "lgtm" as const, baselineGib: 2, baselineVcpu: 2 });
@@ -129,6 +154,141 @@ describe("kageroEnvironment", () => {
     ).toThrow(/control character/);
   });
 
+  it("rejects endpoint characters the agent refuses at boot", () => {
+    for (const bad of ["http://a$(id)", "http://a`id`", 'http://a"b', "http://a\\b", "http://ｍ"]) {
+      expect(() => kageroEnvironment({ ...baseKagero(), otlpEndpointCloudwatch: bad })).toThrow(
+        /printable ASCII/,
+      );
+    }
+    const env = kageroEnvironment({
+      ...baseKagero(),
+      otlpEndpointLgtm: "https://user@host:4318/v1%20x?x=1&y=2",
+    });
+    expect(env.KAGERO_OTLP_ENDPOINT_LGTM).toBe("https://user@host:4318/v1%20x?x=1&y=2");
+  });
+
+  it("rejects endpoints that are not absolute http(s) URLs, as the agent does at boot", () => {
+    for (const bad of [
+      "lgtm:4318",
+      "localhost:4318",
+      "grpc://collector:4317",
+      "https://",
+      "https:///v1/traces",
+      "http:/logs.example.com",
+      "http://host:port",
+    ]) {
+      expect(() => kageroEnvironment({ ...baseKagero(), otlpEndpoint: bad })).toThrow(
+        /otlpEndpoint must be an absolute http/,
+      );
+    }
+    for (const bad of ["169.254.169.254", "http://:80"]) {
+      expect(() => kageroEnvironment({ ...baseKagero(), imdsEndpoint: bad })).toThrow(
+        /imdsEndpoint must be an absolute http/,
+      );
+    }
+    const env = kageroEnvironment({
+      ...baseKagero(),
+      otlpEndpoint: "",
+      otlpEndpointCwLogs: "HTTPS://vpce-0abc.logs.example.com/",
+      imdsEndpoint: "http://[fd00:ec2::254]",
+    });
+    expect(env.KAGERO_OTLP_ENDPOINT).toBeUndefined();
+    expect(env.KAGERO_ENDPOINT_CW_LOGS).toBe("HTTPS://vpce-0abc.logs.example.com/");
+    expect(env.KAGERO_IMDS_ENDPOINT).toBe("http://[fd00:ec2::254]");
+  });
+
+  it("keeps URL values out of synth errors, as the agent does at boot", () => {
+    // A token in the userinfo, the path and the query of each value.
+    const message = (f: () => unknown): string => {
+      try {
+        f();
+      } catch (e) {
+        return String(e);
+      }
+      throw new Error("expected a synth error");
+    };
+    const messages = [
+      message(() =>
+        kageroEnvironment({
+          ...baseKagero(),
+          otlpEndpointLgtm: "https://u:pw-tok@h/path-tok?q=query-tok\n",
+        }),
+      ),
+      message(() =>
+        kageroEnvironment({
+          ...baseKagero(),
+          otlpEndpointCloudwatch: "https://u:pw-tok@h/path-tok?q=query-tok$",
+        }),
+      ),
+      message(() =>
+        kageroEnvironment({ ...baseKagero(), otlpEndpoint: "u:pw-tok@h/path-tok?q=query-tok" }),
+      ),
+      message(() =>
+        kageroEnvironment({ ...baseKagero(), imdsEndpoint: "u:pw-tok@h/path-tok?q=query-tok" }),
+      ),
+      message(() =>
+        kageroEnvironment({
+          ...baseKagero(),
+          collectorReloadUrl: "http://u:pw-tok@127.0.0.1:1/path-tok?q=query-tok\t",
+        }),
+      ),
+    ];
+    for (const msg of messages) {
+      for (const t of ["pw-tok", "path-tok", "query-tok"]) {
+        expect(msg, `${t} leaked`).not.toContain(t);
+      }
+    }
+    expect(messages).toEqual([
+      "Error: otlpEndpointLgtm contains a control character (U+000A)",
+      'Error: otlpEndpointCloudwatch must be printable ASCII without ", \\, $ or backtick',
+      "Error: otlpEndpoint must be an absolute http:// or https:// URL with a host",
+      "Error: imdsEndpoint must be an absolute http:// or https:// URL with a host",
+      "Error: collectorReloadUrl contains a control character (U+0009)",
+    ]);
+  });
+
+  it("rejects JSON Pointers the agent refuses at boot", () => {
+    for (const bad of ["tenant/id", "/a~2b", "/a~"]) {
+      expect(() => kageroEnvironment({ ...baseKagero(), tenantJsonPointer: bad })).toThrow(
+        /RFC 6901/,
+      );
+    }
+    const env = kageroEnvironment({
+      ...baseKagero(),
+      tenantJsonPointer: "/tenant/id",
+      sessionJsonPointer: "/a~1b/~0c",
+    });
+    expect(env.KAGERO_TENANT_JSON_POINTER).toBe("/tenant/id");
+    expect(env.KAGERO_SESSION_JSON_POINTER).toBe("/a~1b/~0c");
+  });
+
+  it("rejects hook peer entries the agent refuses at boot", () => {
+    for (const bad of [
+      "10.0.0.0/33",
+      "::1/129",
+      "not-an-ip/8",
+      "10.0.0.0/8,010.0.0.1",
+      "fe80::1%eth0",
+      "[::1]",
+      "10.0.0.0/-1",
+      "10.0.0.0/8/9",
+    ]) {
+      expect(() => kageroEnvironment({ ...baseKagero(), hookAllowedPeers: bad })).toThrow(
+        /hookAllowedPeers/,
+      );
+    }
+    const peers = " 10.0.0.0/8, 127.0.0.1 ,,fd00::/8,::/0,192.168.0.0/";
+    const env = kageroEnvironment({ ...baseKagero(), hookAllowedPeers: peers });
+    expect(env.KAGERO_HOOK_ALLOWED_PEERS).toBe(peers);
+  });
+
+  it("leaves hook peers given as an unresolved token to the agent", () => {
+    const { stack } = makeStack();
+    const peers = new CfnParameter(stack, "Peers").valueAsString;
+    const env = kageroEnvironment({ ...baseKagero(), hookAllowedPeers: peers });
+    expect(env.KAGERO_HOOK_ALLOWED_PEERS).toBe(peers);
+  });
+
   it("rejects any KAGERO_* key in extraEnvironment", () => {
     expect(() =>
       kageroEnvironment({ ...baseKagero(), extraEnvironment: { KAGERO_APP_UID: "0" } }),
@@ -207,7 +367,12 @@ describe("KageroMicrovmImage", () => {
       ["runtimeHookTimeoutSeconds", 0],
       ["imageHookTimeoutSeconds", 301],
       ["baselineGib", 0],
+      ["hookPort", 0],
       ["hookPort", 70000],
+      ["hookPort", 2019],
+      ["hookPort", 2020],
+      ["hookPort", 4317],
+      ["hookPort", 4318],
     ] as const) {
       expect(
         () =>
@@ -248,6 +413,48 @@ describe("KageroMicrovmImage", () => {
   });
 });
 
+/** Base-URL shapes the stitcher and the k6 worker refuse at init.
+ *  Tokens sit in the userinfo, the path, the query and the fragment. */
+const REJECTED_BASE_URLS = [
+  "https://h.example.com/path-tok?q=query-tok",
+  "https://h.example.com/path-tok?",
+  "https://h.example.com/path-tok#frag-tok",
+  "https://user:pw-tok@h.example.com/path-tok",
+  "https://@h.example.com/path-tok",
+  "h.example.com:4318/path-tok",
+  "ftp://h.example.com/path-tok",
+  "https:///path-tok",
+  "https:h.example.com/path-tok",
+  "https://h.example.com/path-tok ",
+  "https://h.example.com/path-tok\n",
+  "https://h.example.com:99999/path-tok",
+];
+const ACCEPTED_BASE_URLS = [
+  "https://h.example.com",
+  "https://h.example.com/",
+  "http://127.0.0.1:4318",
+  "https://h.example.com/prefix",
+  "https://h.example.com/prefix/",
+];
+
+/** The synth error of `f`, checked to carry none of the value's tokens. */
+function synthError(f: () => unknown): string {
+  let msg = "";
+  try {
+    f();
+  } catch (e) {
+    msg = String(e);
+  }
+  for (const t of ["pw-tok", "path-tok", "query-tok", "frag-tok"]) {
+    expect(msg, `${t} leaked`).not.toContain(t);
+  }
+  return msg;
+}
+
+const BASE_URL_RULE =
+  "must be an absolute http:// or https:// URL with a host, and no query, " +
+  "fragment, userinfo or whitespace";
+
 describe("KageroDurableStitcher", () => {
   it("creates fn + status rule + DLQ + history permission", () => {
     const { stack } = makeStack();
@@ -287,16 +494,79 @@ describe("KageroDurableStitcher", () => {
     }[];
     expect(ruleTargets[0]?.DeadLetterConfig).toBeDefined();
 
-    const policies = t.findResources("AWS::IAM::Policy");
-    const stmts = Object.values(policies).flatMap(
-      (p) => p.Properties.PolicyDocument.Statement as { Action: string[]; Resource: unknown }[],
-    );
-    const history = stmts.find((s) => s.Action.includes("lambda:GetDurableExecutionHistory"));
+    const history = findStatement(t, "lambda:GetDurableExecutionHistory");
     expect(history).toBeDefined();
     expect(JSON.stringify(history?.Resource)).toContain("function:*");
     // secretsmanager read granted for the header secret.
-    const secretRead = stmts.find((s) => s.Action.includes("secretsmanager:GetSecretValue"));
-    expect(secretRead).toBeDefined();
+    expect(findStatement(t, "secretsmanager:GetSecretValue")).toBeDefined();
+    // The lgtm backend never signs AWS requests — no OTLP write grants.
+    expect(findStatement(t, "xray:PutTraceSegments")).toBeUndefined();
+    expect(findStatement(t, "cloudwatch:PutMetricData")).toBeUndefined();
+  });
+
+  it("grants read on a complete-ARN token as-is", () => {
+    const { stack } = makeStack();
+    const secret = new secretsmanager.Secret(stack, "Header");
+    new KageroDurableStitcher(stack, "Stitch", {
+      entry: FIXTURE_ENTRY,
+      otlpEndpoint: "https://example.com/otlp",
+      backend: "lgtm",
+      otlpHeaderSecretArn: secret.secretArn,
+    });
+    const secretRead = findStatement(Template.fromStack(stack), "secretsmanager:GetSecretValue");
+    // Ref yields the complete ARN — only a suffixed resource would leave
+    // GetSecretValue denied at runtime, so the bare ARN must be granted.
+    expect(secretRead?.Resource).toContainEqual({
+      Ref: stack.getLogicalId(secret.node.defaultChild as CfnElement),
+    });
+  });
+
+  it("grants read on a partial-ARN token with the random-suffix wildcard", () => {
+    const { stack } = makeStack();
+    const secret = secretsmanager.Secret.fromSecretNameV2(stack, "Named", "kagero/otlp-header");
+    new KageroDurableStitcher(stack, "Stitch", {
+      entry: FIXTURE_ENTRY,
+      otlpEndpoint: "https://example.com/otlp",
+      backend: "lgtm",
+      otlpHeaderSecretArn: secret.secretArn,
+    });
+    const secretRead = findStatement(Template.fromStack(stack), "secretsmanager:GetSecretValue");
+    // fromSecretNameV2 has no suffix — the real ARN only matches "-??????".
+    expect(JSON.stringify(secretRead?.Resource)).toContain("secret:kagero/otlp-header-??????");
+  });
+
+  for (const backend of ["cloudwatch", "both"] as const) {
+    it(`grants the CloudWatch OTLP writes the ${backend} backend signs with`, () => {
+      const { stack } = makeStack();
+      new KageroDurableStitcher(stack, "Stitch", {
+        entry: FIXTURE_ENTRY,
+        backend,
+        otlpEndpointLgtm: "https://lgtm.example.com/otlp",
+      });
+      const t = Template.fromStack(stack);
+      for (const action of ["xray:PutTraceSegments", "xray:PutSpans", "cloudwatch:PutMetricData"]) {
+        expect(findStatement(t, action)?.Resource).toBe("*");
+      }
+    });
+  }
+
+  it("enforces TLS on the default DLQ", () => {
+    const { stack } = makeStack();
+    new KageroDurableStitcher(stack, "Stitch", {
+      entry: FIXTURE_ENTRY,
+      otlpEndpoint: "https://example.com/otlp",
+      backend: "lgtm",
+    });
+    Template.fromStack(stack).hasResourceProperties("AWS::SQS::QueuePolicy", {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Effect: "Deny",
+            Condition: { Bool: { "aws:SecureTransport": "false" } },
+          }),
+        ]),
+      },
+    });
   });
 
   it("backend 'both' emits the two per-backend endpoint env vars", () => {
@@ -372,6 +642,53 @@ describe("KageroDurableStitcher", () => {
       },
     });
   });
+
+  describe("checks every endpoint prop at synth, as the handler does at init", () => {
+    const PROPS = [
+      "otlpEndpoint",
+      "otlpEndpointLgtm",
+      "otlpEndpointCloudwatch",
+      "otlpEndpointCloudwatchTraces",
+      "otlpEndpointCloudwatchMetrics",
+      "otlpEndpointCloudwatchLogs",
+    ] as const;
+
+    it("names the prop but not the value", () => {
+      for (const prop of PROPS) {
+        for (const value of REJECTED_BASE_URLS) {
+          const { stack } = makeStack();
+          const msg = synthError(
+            () =>
+              new KageroDurableStitcher(stack, "Stitch", {
+                entry: FIXTURE_ENTRY,
+                backend: "both",
+                otlpEndpointLgtm: "https://lgtm.example.com",
+                [prop]: value,
+              }),
+          );
+          expect(msg, `${prop}=${JSON.stringify(value)}`).toBe(
+            `Error: KageroDurableStitcher ${prop} ${BASE_URL_RULE}`,
+          );
+        }
+      }
+    });
+
+    it("accepts a base URL with or without a prefix path, and tokens", () => {
+      const { stack } = makeStack();
+      const token = new CfnParameter(stack, "Endpoint").valueAsString;
+      let n = 0;
+      for (const prop of PROPS) {
+        for (const value of [...ACCEPTED_BASE_URLS, token]) {
+          new KageroDurableStitcher(stack, `Stitch${n++}`, {
+            entry: FIXTURE_ENTRY,
+            backend: "both",
+            otlpEndpointLgtm: "https://lgtm.example.com",
+            [prop]: value,
+          });
+        }
+      }
+    });
+  });
 });
 
 describe("default entries", () => {
@@ -427,12 +744,35 @@ describe("KageroK6Run", () => {
     expect(def).toContain('\\"Payload.$\\":\\"$.payload\\"');
     expect(def).toContain("lambda:invoke");
 
-    // secretsmanager read granted for the grafana token.
-    const policies = t.findResources("AWS::IAM::Policy");
-    const stmts = Object.values(policies).flatMap(
-      (p) => p.Properties.PolicyDocument.Statement as { Action: string[] }[],
-    );
-    expect(stmts.some((s) => s.Action.includes("secretsmanager:GetSecretValue"))).toBe(true);
+    // secretsmanager read granted for the grafana token; a partial ARN
+    // (no random suffix) still gets the wildcard suffix.
+    const secretRead = findStatement(t, "secretsmanager:GetSecretValue");
+    expect(JSON.stringify(secretRead?.Resource)).toContain("secret:g-AbC-??????");
+  });
+
+  it("checks the Grafana URL at synth, as the worker does at init", () => {
+    for (const value of REJECTED_BASE_URLS) {
+      for (const [label, props] of [
+        ["grafanaUrl", { grafanaUrl: value }],
+        ["environment KAGERO_GRAFANA_URL", { environment: { KAGERO_GRAFANA_URL: value } }],
+      ] as const) {
+        const { stack } = makeStack();
+        const msg = synthError(
+          () => new KageroK6Run(stack, "Run", { entry: FIXTURE_ENTRY, ...props }),
+        );
+        expect(msg, `${label}=${JSON.stringify(value)}`).toBe(`Error: ${label} ${BASE_URL_RULE}`);
+      }
+    }
+    const { stack } = makeStack();
+    const token = new CfnParameter(stack, "GrafanaUrl").valueAsString;
+    let n = 0;
+    for (const value of [...ACCEPTED_BASE_URLS, token]) {
+      new KageroK6Run(stack, `Run${n++}`, { entry: FIXTURE_ENTRY, grafanaUrl: value });
+      new KageroK6Run(stack, `Run${n++}`, {
+        entry: FIXTURE_ENTRY,
+        environment: { KAGERO_GRAFANA_URL: value },
+      });
+    }
   });
 
   it("rejects plaintext secret env and bad tolerance", () => {

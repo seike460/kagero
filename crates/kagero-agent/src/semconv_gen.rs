@@ -211,7 +211,7 @@ pub enum AppResult {
     Unimplemented,
     /// The app does not listen on the app hook port.
     NoListener,
-    /// Relay failed (connect refused, timeout, non-2xx).
+    /// Relay failed (timeout, dropped request, non-2xx).
     Failed,
 }
 
@@ -244,9 +244,11 @@ impl TryFrom<&str> for AppResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookStatus {
     Ok,
+    /// The app did not answer within the hook budget.
     Timeout,
+    /// The app answered non-2xx or dropped the request, or the hook body was invalid.
     Error,
-    /// The app returned 404; treated as not implemented.
+    /// The app returned 404 or does not listen on the app hook port; treated as not implemented.
     Unimplemented,
 }
 

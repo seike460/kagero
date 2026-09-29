@@ -1,17 +1,20 @@
 /**
  * Standalone E2E driver — `pnpm sim:e2e`. Spawns the real agent binary,
  * drives the full lifecycle, and verifies the observable contract:
- *   - all hooks answered 2xx, in the real runtime order
- *   - the app received every hook (arrival log persists past its death)
+ *   - all hooks answered 2xx
+ *   - the app received every hook in the real runtime order (arrival log
+ *     persists past its death)
+ *   - /run's runHookPayload reached the app unchanged
  *   - suspend/terminate reached the app BEFORE the agent's lifecycle
  *     event (app-first ordering per ADR-004)
  *   - the agent emitted usage + lifecycle metrics with NO forbidden
  *     attributes on metric datapoints or resources (ADR-008)
  *   - the app is dead after /terminate and the agent still answers
  */
-import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
+import { runBody } from "./hooks.js";
 import { startSim } from "./scenario.js";
 import {
   firstBadResult,
@@ -27,6 +30,10 @@ const here = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const repo = resolve(here, "../../..");
 /** Resolved agent binary path — shared by the CLI, tests, and importers. */
 export const agentBin = process.env.KAGERO_AGENT_BIN ?? join(repo, "target", "debug", "kagero");
+/** The test app beside this module: test-app.ts under src/, test-app.js under dist/. */
+export const testAppPath = join(here, `test-app${extname(fileURLToPath(import.meta.url))}`);
+
+const identity = { microvmId: "sim-mvm-1", tenantId: "tenant-a", sessionId: "session-1" };
 
 interface Check {
   name: string;
@@ -35,14 +42,10 @@ interface Check {
 }
 
 export async function runE2E(): Promise<{ checks: Check[]; ok: boolean }> {
-  if (!existsSync(agentBin)) {
-    throw new Error(
-      `agent binary not found at ${agentBin} — run \`cargo build -p kagero-agent\` first`,
-    );
-  }
   const sim = await startSim({
     agentBin,
-    testAppPath: join(here, "test-app.ts"),
+    testAppPath,
+    runIdentity: identity,
     suspendCycles: 2,
     suspendPauseMs: 400,
   });
@@ -56,13 +59,6 @@ export async function runE2E(): Promise<{ checks: Check[]; ok: boolean }> {
       ok: !bad,
       detail: bad ? `${bad.hook} -> ${bad.status}` : undefined,
     });
-    checks.push({
-      name: "hook order matches the runtime contract",
-      ok:
-        res.lifecycle.sequence().join(",") ===
-        "ready,validate,run,suspend,resume,suspend,resume,terminate",
-      detail: res.lifecycle.sequence().join(","),
-    });
 
     const arrivals = res.appArrivals.map((a) => a.hook);
     checks.push({
@@ -71,18 +67,16 @@ export async function runE2E(): Promise<{ checks: Check[]; ok: boolean }> {
       detail: arrivals.join(","),
     });
     const runArrival = res.appArrivals.find((a) => a.hook === "run");
-    // Full-fidelity check: the ENTIRE runHookPayload subtree must arrive
-    // unchanged — the agent relays it byte-for-byte and must not drop,
-    // rename, or mutate fields (the app is untrusted but the relay is not).
-    const rp = runArrival?.runHookPayload as
-      | { tenant?: { id?: string }; session?: string }
-      | undefined;
+    // The ENTIRE runHookPayload subtree must arrive unchanged — the relay
+    // must not add, drop, rename, or mutate fields (the app is untrusted
+    // but the relay is not). The app records the parsed body, so this is
+    // a deep structural comparison with what the sim sent, not a byte one.
+    const sent = runBody(identity);
     checks.push({
-      name: "runHookPayload reached the app unchanged (id + nested payload)",
+      name: "runHookPayload reached the app unchanged (id + whole payload)",
       ok:
-        runArrival?.microvmId === "sim-mvm-1" &&
-        rp?.tenant?.id === "tenant-a" &&
-        rp?.session === "session-1",
+        runArrival?.microvmId === sent.microvmId &&
+        isDeepStrictEqual(runArrival.runHookPayload, sent.runHookPayload),
       detail: JSON.stringify(runArrival?.runHookPayload),
     });
 
@@ -122,7 +116,7 @@ export async function runE2E(): Promise<{ checks: Check[]; ok: boolean }> {
       const sessions = resourceAttrValues(res.otlp, "/v1/logs", "kagero.session.id");
       checks.push({
         name: "tenant/session extracted from /run body and stamped on logs",
-        ok: tenants.includes("tenant-a") && sessions.includes("session-1"),
+        ok: tenants.includes(identity.tenantId) && sessions.includes(identity.sessionId),
         detail: `tenant=[${tenants.join(",")}] session=[${sessions.join(",")}]`,
       });
     }

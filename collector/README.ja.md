@@ -51,6 +51,21 @@ exporter を 3 つに分ける必要があります。その版はまだ同梱�
 | `{{KAGERO_RESOURCE_ATTRS}}` | ログ/trace 用の OTel `resource` アクション（ID を含む全識別属性） |
 | `{{KAGERO_METRIC_ATTRS}}` | 同じリストの、レジストリ許可版（ADR-008） |
 
+エンドポイントの値（`KAGERO_OTLP_ENDPOINT*`・`KAGERO_ENDPOINT_CW_*`）は、
+二重引用符で囲んだ YAML・river の文字列と、シェルが source する env
+ファイルへそのまま差し込みます。そのため、表示可能な ASCII でない値や、
+`"`・`\`・`$`・バッククォートを含む値では、エージェントは起動しません。
+これらの文字は URL の中でパーセントエンコードしてください。
+
+エンドポイントの値と `KAGERO_IMDS_ENDPOINT` は、ホストを含む
+`http://` か `https://` の絶対 URL にしてください
+（`otlp.example.com:4318` ではなく `https://otlp.example.com`）。
+それ以外の値では、エージェントは変数名を示すエラーを出して起動しません。
+空の値は、未設定として扱います。起動ログ（`kagero starting`）には、
+各 URL の scheme とホスト（ポートを含む）だけを出します。userinfo は
+`REDACTED@` に、パス・クエリ・フラグメントは `/REDACTED` に置き換えます。
+どれにもトークンが入りうるためです。
+
 ### 秘密展開の安全性
 
 `{{KAGERO_SECRET:...}}` と `{{KAGERO_SECRET}}` は **pristine なテンプレートに
@@ -70,18 +85,49 @@ river・env ファイルへそのまま差し込むため、**表示可能な AS
 source されます。秘密の値に `{{KAGERO_` という文字列が含まれると
 残存チェックが fail-closed で失敗します。その部分列を含まない
 秘密を使ってください。CloudWatch 側は秘密を使いません。収集器の `sigv4auth` が
-実行ロールで署名します（ADR-011）。
+実行ロールで署名します（ADR-011）。そのロールに要る権限は、「CloudWatch の前提」に
+書いています。
+
+## CloudWatch の前提
+
+CloudWatch のテンプレート（`cloudwatch/collector.yaml.tmpl` と
+`rotel/cloudwatch.env.tmpl`）は、kagero が作らず、権限も付けない AWS の
+リソースを使います。最初の `/run` より前に用意してください。用意がないと、
+AWS は送信を拒みます。
+
+- **ロググループとログストリーム。** CloudWatch Logs の OTLP エンドポイントは、
+  既にあるロググループとログストリームにだけ書き込みます。ロググループ
+  `/kagero/<image-name>`（`KAGERO_MICROVM_IMAGE_NAME`）と、その中のログストリーム
+  `otlp` を作ります。同じイメージの MicroVM は、すべてこのストリームに書きます。
+  OTel Collector のテンプレートは、resource 属性で MicroVM を見分けます。
+  Rotel のテンプレートは見分けません（下の「未確認」を参照）。
+- **実行ロール。** 収集器は、MicroVM の実行ロール（`run-microvm` の
+  `--execution-role-arn`）で署名します。OTel Collector のテンプレートでは、
+  ロールに次の権限が要ります。
+  - `arn:aws:logs:<region>:<account>:log-group:/kagero/<image-name>:*` への
+    `logs:PutLogEvents`
+  - `*` への `cloudwatch:PutMetricData`
+  - `*` への `xray:PutTraceSegments` と `xray:PutSpans`。X-Ray の OTLP
+    エンドポイントには、アカウントで Transaction Search を有効にしておくことも要ります。
+
+  Rotel のテンプレートは、メトリクスとトレースを `awsemf` と `awsxray` で送ります。
+  その権限は、まだ確かめていません（PoC-04/05）。AWS の収集器の設定手順は
+  `CloudWatchAgentServerPolicy` を付けており、この権限も含みます。最小の権限は
+  PoC-01 と PoC-05 で確かめます。
 
 ## 識別属性のフィルタ（ADR-008）
 
-ID はレコード単位ではなく **resource** 単位で刻印します（`resource`
-プロセッサ / `otelcol.processor.transform` の `context = "resource"`）。
-Prometheus 系の取り込みでラベルになるのは resource 属性だからです。メトリクスの pipeline はさらに、
-アプリが自分の resource に主張した ID 形のキー（`service.instance.id`・
-`faas.instance`・`kagero.tenant.id`・`kagero.session.id` など）を resource・
-データポイント・scope の 3 つの段階で削除します（scope 属性は Prometheus
-互換の取り込みで `otel_scope_*` ラベルになります）。ログと trace には
-`upsert` で全識別属性を付け、アプリの自己申告を上書きします。
+OTel Collector と Alloy のテンプレートは、ID をレコード単位ではなく
+**resource** 単位で刻印します（`resource` プロセッサ /
+`otelcol.processor.transform` の `context = "resource"`）。
+Prometheus 系の取り込みでラベルになるのは resource 属性だからです。その
+メトリクスの pipeline はさらに、アプリが自分の resource に主張した ID 形の
+キー（`service.instance.id`・`faas.instance`・`kagero.tenant.id`・
+`kagero.session.id` など）を resource・データポイント・scope の 3 つの段階で
+削除します（scope 属性は Prometheus 互換の取り込みで `otel_scope_*` ラベルに
+なります）。ログと trace には `upsert` で全識別属性を付け、アプリの自己申告を
+上書きします。Rotel のテンプレートは、このどれも行いません（「未確認」の
+Rotel の注意点を参照）。
 
 ## 起動契約
 
@@ -103,16 +149,23 @@ Prometheus 系の取り込みでラベルになるのは resource 属性だか�
 `KAGERO_COLLECTOR_START`（`build`/`run`）、`KAGERO_COLLECTOR_RELOAD_URL`、
 `KAGERO_BACKEND`、`KAGERO_SECRET_ARN`。
 
+`KAGERO_COLLECTOR_START=build` にすると、スナップショットの前に収集器を起動します。
+`KAGERO_SECRET_ARN` も設定した場合は、最初の起動を `/run` まで待ちます。
+描画する設定に、`/run` で取る秘密情報が要るためです。
+
 ## 未確認（PoC）
 
 - Alloy と Rotel のメモリ・起動時間・再読込の比較: PoC-04。
 - CloudWatch OTLP の SigV4 サービス名とロググループ指定: PoC-05。
+  実行ロールの最小の権限: PoC-01、PoC-05。
 - Rotel の注意点: 内部バッチのため ADR-006 の同期性を完全には満たせません。
   `ROTEL_OTEL_RESOURCE_ATTRIBUTES` は全シグナルに付き、信号ごとの
-  絞り込みはありません。ADR-008 を守るため、同梱の Rotel テンプレートは
+  絞り込みはありません。このため同梱の Rotel テンプレートは、
   メトリクス安全な属性だけを付けます — **Rotel 経路では
   インスタンス・テナント・セッション ID を一切付けません**。そのため
-  Rotel では MicroVM ごとのログ・トレース掘り下げができません
-  （MicroVM ID は CloudWatch のログストリーム名には乗ります）。
-  完全な識別には OTel Collector か Alloy のテンプレートを使います。
+  Rotel では MicroVM ごとのログ・トレース掘り下げができません。
+  また、Rotel のテンプレートは**属性を何も削除しません**。アプリが自分の
+  テレメトリに付けた ID（`service.instance.id` など）は、メトリクスの
+  ラベルに残り、ADR-008 に反します。完全な識別と削除には、
+  OTel Collector か Alloy のテンプレートを使います。
   Rotel の信号別サポートを広げる前に PoC-04 で再確認します。

@@ -1,6 +1,7 @@
 /**
- * AWS Signature Version 4 signer for OTLP HTTP posts to CloudWatch
- * (service name "monitoring" — same as collector/cloudwatch sigv4auth).
+ * AWS Signature Version 4 signer for OTLP HTTP posts to CloudWatch. The
+ * caller picks the service name per signal — "xray" for traces,
+ * "monitoring" for metrics, as in collector/cloudwatch sigv4auth.
  * The stitcher is a plain Lambda: its execution-role credentials arrive
  * as environment variables, and X-Ray/CloudWatch OTLP endpoints require
  * signed requests. PoC-08 verifies the real endpoint + service name.

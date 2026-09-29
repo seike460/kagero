@@ -40,10 +40,7 @@ const MAX_DIM_VALUE = 1024;
 /** Reserved root members — a metric of this name would corrupt a record. */
 const RESERVED = new Set(["_aws", ATTR_KAGERO_K6_RUN_ID, ATTR_KAGERO_K6_SHARD_ID]);
 
-type K6MetricType = "gauge" | "rate" | "counter" | "trend";
-
 interface K6MetricMeta {
-  type?: K6MetricType;
   contains?: string;
 }
 
@@ -117,7 +114,6 @@ export class EmfEncoder {
       const name = isSubmetric(obj.metric) ? baseMetricName(obj.metric) : obj.metric.trim();
       if (name) {
         this.metas.set(name, {
-          type: obj.data?.type as K6MetricType | undefined,
           contains: typeof obj.data?.contains === "string" ? obj.data.contains : undefined,
         });
       }

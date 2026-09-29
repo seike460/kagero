@@ -112,11 +112,49 @@ export async function stitchNotification(
   };
 }
 
-/** Lambda handler shape — env-configured for real deployments. */
+/** Every setting whose value can become an OtlpTarget endpoint. */
+const ENDPOINT_SETTINGS = [
+  "KAGERO_OTLP_ENDPOINT",
+  "KAGERO_OTLP_ENDPOINT_LGTM",
+  "KAGERO_OTLP_ENDPOINT_CLOUDWATCH",
+  "KAGERO_OTLP_ENDPOINT_CLOUDWATCH_TRACES",
+  "KAGERO_OTLP_ENDPOINT_CLOUDWATCH_METRICS",
+  "KAGERO_OTLP_ENDPOINT_CLOUDWATCH_LOGS",
+] as const;
+
+const BASE_URL_RULE =
+  "must be an absolute http:// or https:// URL with a host, and no query, " +
+  "fragment, userinfo or whitespace";
+
+/**
+ * The OtlpTarget.endpoint shape. "/v1/<signal>" is appended as text, so
+ * a query or fragment would come before it, fetch refuses userinfo, and
+ * whitespace that the URL parser trims from the value alone breaks the
+ * joined URL. The authority ends at / \ ? # as in the WHATWG parser; an
+ * "@" in it is userinfo, even an empty one ("https://@host").
+ */
+function isOtlpBaseUrl(v: string): boolean {
+  const scheme = /^https?:\/\//i.exec(v);
+  const authority = scheme ? (v.slice(scheme[0].length).split(/[/\\?#]/, 1)[0] ?? "") : "";
+  if (authority === "" || authority.includes("@") || /[?#\s\p{Cc}]/u.test(v)) return false;
+  try {
+    return new URL(v).hostname !== "";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Lambda handler shape — env-configured for real deployments. Every
+ * endpoint setting that is set, and every endpoint derived from the
+ * region, is checked here once against the OtlpTarget.endpoint shape;
+ * the error names the setting but never its value, which may carry a
+ * token.
+ */
 export function handlerFromEnv(env: NodeJS.ProcessEnv = process.env) {
   // Region env name matches the agent's KAGERO_AWS_REGION (config.rs).
   const region = env.KAGERO_AWS_REGION ?? env.AWS_REGION;
-  const sharedHeaders = env.KAGERO_OTLP_HEADER
+  const lgtmHeaders = env.KAGERO_OTLP_HEADER
     ? // "Name: value; Name2: value2" — never secrets in env beyond a token
       // the deployer explicitly chooses to place (same trust level as the
       // collector env templates, ADR-011 aware).
@@ -132,7 +170,10 @@ export function handlerFromEnv(env: NodeJS.ProcessEnv = process.env) {
       endpoint: endpoint ?? "",
       backend,
       region,
-      headers: sharedHeaders,
+      // CloudWatch authenticates with SigV4 only — the LGTM credential
+      // must not reach AWS, and a second authorization header breaks the
+      // signature.
+      headers: backend === "lgtm" ? lgtmHeaders : undefined,
       sigv4Service: env.KAGERO_OTLP_SIGV4_SERVICE,
     };
     if (backend === "cloudwatch") {
@@ -159,6 +200,11 @@ export function handlerFromEnv(env: NodeJS.ProcessEnv = process.env) {
       `unknown KAGERO_BACKEND ${JSON.stringify(backendEnv)} — expected lgtm|cloudwatch|both`,
     );
   }
+  // Fail at init, not on every export. Empty means unset.
+  for (const key of ENDPOINT_SETTINGS) {
+    const v = env[key];
+    if (v && !isOtlpBaseUrl(v)) throw new Error(`${key} ${BASE_URL_RULE}`);
+  }
   if (backendEnv === "both") {
     if (!env.KAGERO_OTLP_ENDPOINT_LGTM) {
       // CloudWatch side may derive from AWS_REGION; LGTM has no default.
@@ -177,6 +223,16 @@ export function handlerFromEnv(env: NodeJS.ProcessEnv = process.env) {
       throw new Error("KAGERO_OTLP_ENDPOINT is required");
     }
     targets.push(mk(endpoint, backendEnv as "lgtm" | "cloudwatch"));
+  }
+  // Every setting was checked above, so an endpoint that fails here is a
+  // CloudWatch default built from the region.
+  for (const t of targets) {
+    for (const v of [t.endpoint, t.endpointTraces, t.endpointMetrics]) {
+      if (v !== undefined && !isOtlpBaseUrl(v)) {
+        const key = env.KAGERO_AWS_REGION !== undefined ? "KAGERO_AWS_REGION" : "AWS_REGION";
+        throw new Error(`${key} does not make a valid CloudWatch OTLP endpoint URL`);
+      }
+    }
   }
 
   const fetcher = lambdaApiFetcher({ region });

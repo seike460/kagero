@@ -19,6 +19,8 @@ pub enum RelayOutcome {
     /// Connection refused — the app does not listen for hooks at all;
     /// also treated as "unimplemented" so hook-less apps work.
     NoListener,
+    /// The app took the hook but did not answer within the budget.
+    TimedOut(String),
     /// Any other status or transport failure — the app answered but
     /// failed, or couldn't be reached mid-request.
     Failed(u16, String),
@@ -39,7 +41,7 @@ impl App {
             pid: Arc::new(Mutex::new(None)),
             expected_exit: Arc::new(AtomicBool::new(false)),
             ever_started: AtomicBool::new(false),
-            client: reqwest::Client::new(),
+            client: crate::local_http_client(),
             reaper,
         }
     }
@@ -148,10 +150,121 @@ impl App {
             Err(e) => {
                 if e.is_connect() {
                     RelayOutcome::NoListener
+                } else if e.is_timeout() {
+                    RelayOutcome::TimedOut(e.to_string())
                 } else {
                     RelayOutcome::Failed(0, e.to_string())
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    const HOOK: &str = "/aws/lambda-microvms/runtime/v1/run";
+
+    /// A loopback "app" that reads each request and answers with
+    /// `response` (None = never answer). Returns its port and the number
+    /// of connections it accepted.
+    pub(crate) async fn fake_app(response: Option<String>) -> (u16, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                let response = response.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 1024];
+                    while !buf.ends_with(b"\r\n\r\n{}") {
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                        }
+                    }
+                    match response {
+                        Some(r) => {
+                            let _ = stream.write_all(r.as_bytes()).await;
+                        }
+                        None => tokio::time::sleep(Duration::from_secs(30)).await,
+                    }
+                });
+            }
+        });
+        (port, hits)
+    }
+
+    async fn relay(port: u16, budget: Duration) -> RelayOutcome {
+        App::new(crate::process::Reaper::idle())
+            .relay(port, HOOK, b"{}", budget, Instant::now() + budget)
+            .await
+    }
+
+    #[tokio::test]
+    async fn relay_never_follows_a_redirect() {
+        let (elsewhere, elsewhere_hits) = fake_app(Some(
+            "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".into(),
+        ))
+        .await;
+        let (app, _) = fake_app(Some(format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nlocation: http://127.0.0.1:{elsewhere}{HOOK}\r\n\
+             content-length: 0\r\nconnection: close\r\n\r\n"
+        )))
+        .await;
+        let out = relay(app, Duration::from_secs(5)).await;
+        assert!(matches!(out, RelayOutcome::Failed(307, _)));
+        assert_eq!(elsewhere_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn relay_reports_a_silent_app_as_timed_out() {
+        let (app, _) = fake_app(None).await;
+        let out = relay(app, Duration::from_millis(200)).await;
+        assert!(matches!(out, RelayOutcome::TimedOut(_)));
+    }
+
+    #[tokio::test]
+    async fn relay_reports_404_as_unimplemented() {
+        let (app, _) = fake_app(Some(
+            "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".into(),
+        ))
+        .await;
+        let out = relay(app, Duration::from_secs(5)).await;
+        assert!(matches!(out, RelayOutcome::Unimplemented));
+    }
+
+    #[tokio::test]
+    async fn relay_reports_a_closed_port_as_no_listener() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let out = relay(port, Duration::from_secs(5)).await;
+        assert!(matches!(out, RelayOutcome::NoListener));
+    }
+
+    #[tokio::test]
+    async fn relay_caps_the_error_body_at_8_kib() {
+        let body = "x".repeat(20 * 1024);
+        let (app, _) = fake_app(Some(format!(
+            "HTTP/1.1 500 Internal Server Error\r\ncontent-length: {}\r\n\
+             connection: close\r\n\r\n{body}",
+            body.len()
+        )))
+        .await;
+        let out = relay(app, Duration::from_secs(5)).await;
+        let RelayOutcome::Failed(500, text) = out else {
+            panic!("expected Failed(500, _)");
+        };
+        assert_eq!(text.len(), 8 * 1024);
     }
 }

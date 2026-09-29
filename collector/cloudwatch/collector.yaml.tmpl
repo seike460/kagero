@@ -1,4 +1,4 @@
-# kagero collector config — CloudWatch backend (OTel/Rotel compatible YAML).
+# kagero collector config — CloudWatch backend (OTel Collector contrib YAML).
 #
 # Same receiver/processor layout as collector/lgtm/; only exporters and
 # auth differ (architecture.md §5: 送り先の部分だけ差し替える).
@@ -155,7 +155,8 @@ processors:
 # CloudWatch OTLP endpoints are per-signal, and each signs with a
 # different SigV4 service name (AWS OTLP endpoints doc):
 #   logs     → https://logs.{region}.amazonaws.com/v1/logs     (service: logs,
-#              requires x-aws-log-group / x-aws-log-stream headers)
+#              requires x-aws-log-group / x-aws-log-stream headers naming
+#              an EXISTING group and stream — the endpoint creates neither)
 #   metrics  → https://monitoring.{region}.amazonaws.com/v1/metrics (monitoring)
 #   traces   → https://xray.{region}.amazonaws.com/v1/traces    (xray)
 # The otlphttp exporter appends /v1/<signal> to the endpoint itself.
@@ -186,8 +187,10 @@ exporters:
     auth:
       authenticator: sigv4auth/logs
     headers:
+      # Fixed names, so both can be created before the first /run. Many
+      # MicroVMs share the stream; resource/identity keeps them apart.
       x-aws-log-group: "/kagero/{{KAGERO_IMAGE_NAME}}"
-      x-aws-log-stream: "{{KAGERO_MICROVM_ID}}"
+      x-aws-log-stream: "otlp"
     retry_on_failure:
       enabled: false
     sending_queue:

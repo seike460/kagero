@@ -12,26 +12,38 @@ pub struct Identity {
     pub session_id: Option<String>,
 }
 
+/// RFC 6901 syntax: empty (the whole document), or '/'-prefixed with
+/// every '~' followed by '0' or '1'. A non-empty pointer without the
+/// leading '/' is a config error, not a relative lookup, and other '~'
+/// escapes are malformed input, not a literal key.
+pub fn pointer_is_valid(pointer: &str) -> bool {
+    if pointer.is_empty() {
+        return true;
+    }
+    if !pointer.starts_with('/') {
+        return false;
+    }
+    let mut chars = pointer.chars();
+    while let Some(c) = chars.next() {
+        if c == '~' && !matches!(chars.next(), Some('0') | Some('1')) {
+            return false;
+        }
+    }
+    true
+}
+
 /// RFC 6901 JSON Pointer lookup returning a scalar as String.
 pub fn json_pointer(doc: &Value, pointer: &str) -> Option<String> {
-    if pointer.is_empty() {
-        return scalar(doc);
+    if !pointer_is_valid(pointer) {
+        return None;
     }
-    // RFC 6901: a non-empty pointer must start with '/' — anything else
-    // is a config error, not a relative lookup.
-    let rest = pointer.strip_prefix('/')?;
+    let Some(rest) = pointer.strip_prefix('/') else {
+        return scalar(doc);
+    };
     let mut cur = doc;
     // Only the leading '/' is structural — later empty segments are the
     // real "" key (RFC 6901: "/" dereferences key "", "//k" is doc[""]["k"]).
     for raw in rest.split('/') {
-        // '~' must be followed by '0' or '1' — other escapes are
-        // malformed input, not a literal key.
-        let mut chars = raw.chars();
-        while let Some(c) = chars.next() {
-            if c == '~' && !matches!(chars.next(), Some('0') | Some('1')) {
-                return None;
-            }
-        }
         // Decode order matters: ~1 → '/' first, then ~0 → '~', so the
         // valid RFC sequence "~01" yields the key "~1".
         let token = raw.replace("~1", "/").replace("~0", "~");
@@ -84,10 +96,13 @@ pub fn identity_from_run_body(
         other => other.clone(),
     };
 
+    // An id with no allowed character left is absent, not "" — an empty
+    // tenant id would still be stamped on telemetry and pool every such
+    // tenant into one blank bucket.
     let lookup = |p: Option<&str>| -> Option<String> {
         let p = p?;
         let doc = payload_doc.as_ref()?;
-        json_pointer(doc, p).map(|s| sanitize_id(&s))
+        Some(sanitize_id(&json_pointer(doc, p)?)).filter(|s| !s.is_empty())
     };
 
     Identity {
@@ -187,6 +202,16 @@ mod tests {
     }
 
     #[test]
+    fn pointer_syntax() {
+        for ok in ["", "/", "/tenant/id", "//k", "/a~1b/~0key", "/~01"] {
+            assert!(pointer_is_valid(ok), "{ok:?} is a valid pointer");
+        }
+        for bad in ["tenant/id", "tenant", "/a~2b", "/a~", "/~/x", "~0"] {
+            assert!(!pointer_is_valid(bad), "{bad:?} is not a valid pointer");
+        }
+    }
+
+    #[test]
     fn json_pointer_escapes() {
         let doc = json!({"a/b": {"~key": 7}});
         assert_eq!(json_pointer(&doc, "/a~1b/~0key"), Some("7".into()));
@@ -220,6 +245,23 @@ mod tests {
         assert!(!clean.contains(';'));
         assert!(!clean.contains('{'));
         assert_eq!(sanitize_id("ok-tenant_1.2"), "ok-tenant_1.2");
+    }
+
+    #[test]
+    fn ids_left_empty_by_sanitizing_are_absent() {
+        let body = json!({
+            "microvmId": "mvm-1",
+            "runHookPayload": {"tenant": {"id": "テナント"}, "session": ""},
+        });
+        let id = identity_from_run_body(&body, Some("/tenant/id"), Some("/session"));
+        assert_eq!(id.tenant_id, None);
+        assert_eq!(id.session_id, None);
+        let attrs = identity_attributes(&id, "img", "1", "2gb", "us-east-1");
+        assert!(
+            !attrs
+                .iter()
+                .any(|(k, _)| k == sem::ATTR_KAGERO_TENANT_ID || k == sem::ATTR_KAGERO_SESSION_ID)
+        );
     }
 
     #[test]

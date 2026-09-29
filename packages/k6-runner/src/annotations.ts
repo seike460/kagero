@@ -10,10 +10,16 @@
  */
 
 export interface GrafanaAnnotations {
-  /** Base URL, e.g. "https://grafana.example.com" (no trailing slash). */
+  /** Base URL, e.g. "https://grafana.example.com", with an optional
+   *  prefix path. Trailing slashes are dropped and "/api/annotations" is
+   *  appended as text, so it takes no query, fragment or userinfo;
+   *  handlerFromEnv refuses such a KAGERO_GRAFANA_URL at init. */
   endpoint: string;
   /** Grafana service-account token with annotations:create. */
   token: string;
+  /** POST timeout (default 5000 ms) — shard 0 returns its result only
+   *  after the POST settles, so a hung Grafana must not hold it. */
+  timeoutMs?: number;
 }
 
 export type FetchLike = (
@@ -22,6 +28,7 @@ export type FetchLike = (
     method: string;
     headers: Record<string, string>;
     body: string;
+    signal?: AbortSignal;
   },
 ) => Promise<{ ok: boolean; status: number }>;
 
@@ -42,7 +49,7 @@ export async function postRunAnnotation(
   fetchImpl: FetchLike = fetch as unknown as FetchLike,
 ): Promise<void> {
   try {
-    const res = await fetchImpl(`${g.endpoint}/api/annotations`, {
+    const res = await fetchImpl(`${g.endpoint.replace(/\/+$/, "")}/api/annotations`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -54,6 +61,7 @@ export async function postRunAnnotation(
         tags: ["kagero", "k6", `run:${a.runId}`],
         text: a.text ?? `kagero k6 run ${a.runId} (${a.shardCount} shard(s))`,
       }),
+      signal: AbortSignal.timeout(g.timeoutMs ?? 5000),
     });
     if (!res.ok) {
       // An annotation failure must not fail the load test itself.
@@ -62,6 +70,16 @@ export async function postRunAnnotation(
   } catch (e) {
     // Transport errors (DNS/connect/timeout) are failures too — warn,
     // never reject.
-    console.warn(`grafana annotation POST failed: ${(e as Error).message}`);
+    console.warn(`grafana annotation POST failed: ${fetchFailure(e)}`);
   }
+}
+
+/** Why fetch failed, without its message: some messages quote the whole
+ *  URL ("Failed to parse URL from …", "…includes credentials: …"), and
+ *  the endpoint's userinfo, path or query may carry a token. The error
+ *  name and the network error code (ECONNREFUSED, ENOTFOUND…) do not. */
+function fetchFailure(e: unknown): string {
+  if (!(e instanceof Error)) return "unknown error";
+  const code = (e.cause as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" ? `${e.name} (${code})` : e.name;
 }

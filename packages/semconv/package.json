@@ -1,7 +1,8 @@
 {
   "name": "@kagero/semconv",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {
@@ -19,6 +20,7 @@
     "generate": "tsx scripts/generate.ts"
   },
   "devDependencies": {
+    "@types/node": "^24.0.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0",

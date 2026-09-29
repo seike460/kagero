@@ -6,7 +6,7 @@
  * ```json
  * {
  *   "shardInput": {
- *     "runId": "r-1", "shardCount": 4, "scriptPath": "/k6/test.js",
+ *     "runId": "r-1", "shardCount": 4, "scriptPath": "/opt/k6/test.js",
  *     "startAtMs": 1750000000000, "backend": "lgtm",
  *     "extraTags": { "suite": "checkout" }
  *   },
@@ -21,6 +21,26 @@
  * its own `shardIndex` (and optionally extraArgs/extraTags/k6Bin). The
  * map merges them with States.JsonMerge and hands the worker a literal
  * ShardEvent — no field-name translation to drift.
+ *
+ * Every shard waits for `startAtMs` (epoch ms) inside its invocation,
+ * so a start more than 10 minutes ahead is refused — the wait and the
+ * k6 run share the Lambda timeout.
+ *
+ * The construct ships neither k6 nor the script. The worker spawns
+ * `k6` from PATH (or the ShardEvent's absolute `k6Bin`), so add a layer
+ * with `bin/k6` built for the worker's architecture —
+ * `run.worker.addLayers(...)` puts it at /opt/bin/k6, which Lambda keeps
+ * on PATH — and ship the script the same way (a layer's `k6/test.js`
+ * is /opt/k6/test.js). Without k6, every shard waits until `startAtMs`
+ * and then fails. `scriptPath` must be a file inside the worker — under
+ * the function code (LAMBDA_TASK_ROOT, /var/task; a relative path
+ * resolves there) or a layer (/opt). A URL, `-`, or a path or symlink
+ * that leads elsewhere (/tmp, ../) is refused, so the execution input
+ * cannot point k6 at a remote script or a file written at run time.
+ *
+ * k6 is AGPL-3.0: kagero only invokes it. A layer that redistributes
+ * the binary keeps it unmodified and states the license and where to
+ * get the source (functions-durable-k6.md §3-4).
  */
 
 import { createRequire } from "node:module";
@@ -33,12 +53,13 @@ import {
   aws_stepfunctions_tasks as tasks,
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
+import { checkBaseUrl } from "./base-url.js";
 import { grantSecretRead } from "./secrets.js";
 
 const require_ = createRequire(import.meta.url);
 
 export interface KageroK6RunProps {
-  /** Entry file — defaults to the built k6-runner package. */
+  /** Entry file — defaults to the k6-runner package source (src/index.ts). */
   entry?: string;
   /**
    * Non-secret env for the worker (backend endpoints, EMF namespace,
@@ -46,14 +67,27 @@ export interface KageroK6RunProps {
    * and any *_SECRET_ARN are rejected — use the *SecretArn props below,
    * which also attach the secretsmanager grant (ADR-011). Note the
    * backend comes from each ShardEvent, not env — KAGERO_BACKEND here
-   * is dead config.
+   * is dead config. The keys and their values are listed on
+   * `outputFromEnv` in packages/k6-runner: KAGERO_OTLP_ENDPOINT there
+   * is host:port with no scheme (k6's own format), not the URL that the
+   * agent and KageroDurableStitcher take under the same name.
    */
   environment?: Record<string, string>;
-  /** Secrets Manager ARNs resolved by the worker at init. */
+  /** Secrets Manager ARNs resolved by the worker at init. This one
+   *  holds a Grafana service-account token with annotations:create. */
   grafanaTokenSecretArn?: string;
+  /** Password for the http exporter's basic auth; KAGERO_OTLP_USERNAME
+   *  goes in `environment`. */
   otlpPasswordSecretArn?: string;
+  /** Exporter headers as "k1=v1,k2=v2" (K6_OTEL_HEADERS) — not the
+   *  "Name: value" of KageroDurableStitcher's otlpHeaderSecretArn. */
   otlpHeadersSecretArn?: string;
-  /** Grafana base URL for region annotations (not secret). */
+  /** Grafana base URL for region annotations (not secret), e.g.
+   *  "https://grafana.example.com", with an optional prefix path. The
+   *  worker appends /api/annotations, so a query, fragment or userinfo
+   *  fails synth (the Grafana token goes in grafanaTokenSecretArn); an
+   *  unresolved CDK token is checked by the worker at init instead. The
+   *  same check applies to KAGERO_GRAFANA_URL in `environment`. */
   grafanaUrl?: string;
   memorySize?: number;
   timeout?: Duration;
@@ -125,6 +159,13 @@ export class KageroK6Run extends Construct {
         );
       }
       environment.KAGERO_GRAFANA_URL = props.grafanaUrl;
+    }
+    // The worker refuses a bad value at init; fail synth instead.
+    if (environment.KAGERO_GRAFANA_URL) {
+      checkBaseUrl(
+        props.grafanaUrl ? "grafanaUrl" : "environment KAGERO_GRAFANA_URL",
+        environment.KAGERO_GRAFANA_URL,
+      );
     }
     const secretGrants: [string | undefined, string][] = [
       [props.grafanaTokenSecretArn, "KAGERO_GRAFANA_TOKEN_SECRET_ARN"],

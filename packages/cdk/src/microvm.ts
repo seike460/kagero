@@ -12,7 +12,8 @@
  *   are rejected (secrets arrive via Secrets Manager at /run).
  */
 
-import { Annotations, aws_lambda as lambda } from "aws-cdk-lib";
+import { isIP } from "node:net";
+import { Annotations, aws_lambda as lambda, Token } from "aws-cdk-lib";
 import { Construct } from "constructs";
 
 export const KAGERO_DEFAULT_HOOK_PORT = 2018;
@@ -35,6 +36,17 @@ const SECRET_KEY_RE =
 /** Agent env_safe charset (config.rs) — interpolated into templates. */
 const ENV_SAFE_RE = /^[A-Za-z0-9._\-:/+=]*$/;
 
+/** Agent endpoint_safe (config.rs): printable ASCII without `"`, `\`,
+ *  `$` or backtick — endpoints also land in shell-sourced env files. */
+const ENDPOINT_SAFE_RE = /^[\x20-\x7e]*$/;
+const ENDPOINT_UNSAFE_RE = /["\\$`]/;
+
+/** RFC 6901 JSON Pointer — the agent bails at boot on anything else. */
+const JSON_POINTER_RE = /^(\/([^~]|~[01])*)?$/;
+
+/** Collector templates bind OTLP/gRPC on this fixed port. */
+const OTLP_GRPC_PORT = 4317;
+
 export interface KageroMicrovmConfig {
   /**
    * Backend selection. `both` is forwarded verbatim to the agent, but no
@@ -42,10 +54,11 @@ export interface KageroMicrovmConfig {
    * custom `collectorConfigTemplate` (the agent warns at startup).
    */
   backend: "lgtm" | "cloudwatch" | "both";
-  /** Billing baseline — env + optionally echoed into resources so
-   *  dashboards and billing read the same number. */
+  /** Billing baseline — emitted as KAGERO_MICROVM_BASELINE_GIB/_VCPU
+   *  only; `resources` is passed through as given, not derived. */
   baselineGib: number;
   baselineVcpu: number;
+  /** OTLP endpoints: absolute http:// or https:// URLs with a host. */
   otlpEndpointLgtm?: string;
   otlpEndpointCloudwatch?: string;
   /**
@@ -56,9 +69,15 @@ export interface KageroMicrovmConfig {
   otlpEndpointCwTraces?: string;
   otlpEndpointCwMetrics?: string;
   otlpEndpointCwLogs?: string;
-  /** Single-backend OTLP endpoint override (KAGERO_OTLP_ENDPOINT). */
+  /**
+   * LGTM endpoint fallback (KAGERO_OTLP_ENDPOINT), used when
+   * otlpEndpointLgtm is unset. The agent never applies it to
+   * CloudWatch — use otlpEndpointCloudwatch there (unlike the durable
+   * stitcher, where the same variable is also the CloudWatch fallback).
+   */
   otlpEndpoint?: string;
-  /** Hooks.Port + KAGERO_HOOK_PORT (default 2018, range 1–65535). */
+  /** Hooks.Port + KAGERO_HOOK_PORT (default 2018, range 1–65535; must
+   *  not collide with the agent's other ports 2019/2020/4318 or 4317). */
   hookPort?: number;
   /**
    * Seconds (CFN range 1–60) applied to every runtime hook timeout
@@ -81,14 +100,19 @@ export interface KageroMicrovmConfig {
   region?: string;
   appUid?: number;
   appGid?: number;
-  /** Comma-separated CIDR prefixes allowed on the hook port. */
+  /** Comma-separated CIDRs or bare IPs allowed on the hook port. Unset,
+   *  the agent rejects loopback peers only, so the app can still forge
+   *  hooks (`/run`, `/terminate`) through the MicroVM's own IP — a risk
+   *  that stays open until PoC-02 confirms Lambda's source addresses. */
   hookAllowedPeers?: string;
   /** Secrets Manager ARN the agent fetches at /run — a reference, not
    *  the secret itself (ADR-011 allows ARNs in env). */
   secretArn?: string;
   /** Secrets Manager REST endpoint override (KAGERO_SECRETS_ENDPOINT). */
   secretsEndpoint?: string;
-  /** IMDS endpoint override (KAGERO_IMDS_ENDPOINT). */
+  /** IMDS endpoint override (KAGERO_IMDS_ENDPOINT). Like the OTLP
+   *  endpoints above, an absolute http:// or https:// URL with a host —
+   *  the agent refuses anything else at boot. */
   imdsEndpoint?: string;
   /** Collector supervision — without collectorBin the agent is
    *  supervisor-only and exports no telemetry. */
@@ -162,12 +186,70 @@ function checkEnvSafe(label: string, v: string): void {
 
 /** Values rendered into collector YAML/river must not carry control
  *  chars — a `\n` (or NEL/U+2028 line break) corrupts the generated
- *  config (URLs need ?&%@ so the strict env_safe charset can't apply). */
+ *  config (URLs need ?&%@ so the strict env_safe charset can't apply).
+ *  The error names the code point, not the value: an endpoint or the
+ *  reload URL may carry a token in its userinfo, path or query. */
 function checkNoControlChars(label: string, v: string): void {
   for (const c of v) {
     const code = c.codePointAt(0) ?? 0;
     if (code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029) {
-      throw new Error(`${label} contains a control character: ${JSON.stringify(v)}`);
+      const hex = code.toString(16).toUpperCase().padStart(4, "0");
+      throw new Error(`${label} contains a control character (U+${hex})`);
+    }
+  }
+}
+
+/** Endpoints render into collector YAML/river and shell-sourced env
+ *  files — mirror the agent's endpoint_safe so a bad value fails synth,
+ *  not PID 1 at boot. Like the agent's errors, these name the prop but
+ *  not the value, which may carry a token. */
+function checkEndpoint(label: string, v: string): void {
+  checkNoControlChars(label, v);
+  if (!ENDPOINT_SAFE_RE.test(v) || ENDPOINT_UNSAFE_RE.test(v)) {
+    throw new Error(`${label} must be printable ASCII without ", \\, $ or backtick`);
+  }
+  // Empty is "unset" — the value is not emitted, and the agent treats
+  // an empty endpoint as unset too.
+  if (v !== "") checkHttpUrl(label, v);
+}
+
+/** Mirrors the agent's is_http_url (config.rs): an absolute http:// or
+ *  https:// URL with a host. The WHATWG parser reads `http:/h` and
+ *  `http:///h` as host `h`, so the literal `://` and a non-empty
+ *  authority are checked first, as the agent does. */
+function checkHttpUrl(label: string, v: string): void {
+  const rest = v.includes("://") ? v.slice(v.indexOf("://") + 3) : "";
+  let ok = rest !== "" && !/^[/?#]/.test(rest);
+  if (ok) {
+    try {
+      const u = new URL(v);
+      ok = (u.protocol === "http:" || u.protocol === "https:") && u.hostname !== "";
+    } catch {
+      ok = false;
+    }
+  }
+  if (!ok) {
+    throw new Error(`${label} must be an absolute http:// or https:// URL with a host`);
+  }
+}
+
+/** Mirrors the agent's PeerRule::parse (config.rs): each entry is an IP
+ *  or IP/prefix within the family's width, else PID 1 bails at boot.
+ *  Node's isIP also admits IPv6 zone IDs, which the agent rejects. */
+function checkHookPeers(v: string): void {
+  if (Token.isUnresolved(v)) return;
+  for (const entry of v.split(",").map((s) => s.trim())) {
+    if (entry === "") continue;
+    const slash = entry.indexOf("/");
+    const addr = slash < 0 ? entry : entry.slice(0, slash);
+    const prefix = slash < 0 ? "" : entry.slice(slash + 1);
+    const family = addr.includes("%") ? 0 : isIP(addr);
+    const max = family === 4 ? 32 : 128;
+    if (family === 0 || (prefix !== "" && !(/^\+?\d+$/.test(prefix) && Number(prefix) <= max))) {
+      throw new Error(
+        `hookAllowedPeers entry ${JSON.stringify(entry)} must be an IP or CIDR ` +
+          `(prefix up to /32 for IPv4, /128 for IPv6)`,
+      );
     }
   }
 }
@@ -209,6 +291,24 @@ export function kageroEnvironment(cfg: KageroMicrovmConfig): Record<string, stri
     ["otlpEndpointCwTraces", cfg.otlpEndpointCwTraces],
     ["otlpEndpointCwMetrics", cfg.otlpEndpointCwMetrics],
     ["otlpEndpointCwLogs", cfg.otlpEndpointCwLogs],
+  ] as const) {
+    if (v !== undefined) checkEndpoint(label, v);
+  }
+  // Not rendered into templates — only the agent's URL check applies.
+  if (cfg.imdsEndpoint) checkHttpUrl("imdsEndpoint", cfg.imdsEndpoint);
+  for (const [label, v] of [
+    ["tenantJsonPointer", cfg.tenantJsonPointer],
+    ["sessionJsonPointer", cfg.sessionJsonPointer],
+  ] as const) {
+    if (v !== undefined && !JSON_POINTER_RE.test(v)) {
+      throw new Error(
+        `${label} must be an RFC 6901 JSON Pointer (empty, or starting with "/" ` +
+          `with ~ escaped as ~0 or ~1): ${JSON.stringify(v)}`,
+      );
+    }
+  }
+  if (cfg.hookAllowedPeers !== undefined) checkHookPeers(cfg.hookAllowedPeers);
+  for (const [label, v] of [
     ["collectorConfigTemplate", cfg.collectorConfigTemplate],
     ["collectorConfigOut", cfg.collectorConfigOut],
     ["collectorReloadUrl", cfg.collectorReloadUrl],
@@ -303,6 +403,18 @@ export class KageroMicrovmImage extends Construct {
     checkNumber("baselineVcpu", cfg.baselineVcpu, 0.125, 128);
     const hookPort = cfg.hookPort ?? KAGERO_DEFAULT_HOOK_PORT;
     checkRange("hookPort", hookPort, 1, 65535);
+    // The agent bails at boot when two listeners share a port (config.rs).
+    const otherPorts = [
+      KAGERO_DEFAULT_APP_HOOK_PORT,
+      KAGERO_DEFAULT_OTLP_PORT,
+      KAGERO_DEFAULT_ADMIN_PORT,
+      OTLP_GRPC_PORT,
+    ];
+    if (otherPorts.includes(hookPort)) {
+      throw new Error(
+        `hookPort ${hookPort} collides with a port the agent or collector binds (${otherPorts.join(", ")})`,
+      );
+    }
     // Runtime hooks: CFN range is 1–60 (aws-properties-lambda-
     // microvmimage-microvmhooks).
     const runtimeTimeout = cfg.runtimeHookTimeoutSeconds ?? KAGERO_DEFAULT_HOOK_TIMEOUT_SECONDS;
@@ -322,8 +434,8 @@ export class KageroMicrovmImage extends Construct {
     if (cfg.sampleIntervalMs !== undefined) {
       checkRange("sampleIntervalMs", cfg.sampleIntervalMs, 1, 3_600_000);
     }
-    // u32 on the agent side — an out-of-range uid/gid parses to None
-    // and silently changes privilege-drop semantics (config.rs).
+    // u32 on the agent side — anything else fails to parse and the
+    // agent bails at boot, taking PID 1 down (config.rs).
     if (cfg.appUid !== undefined) checkRange("appUid", cfg.appUid, 0, 4_294_967_295);
     if (cfg.appGid !== undefined) checkRange("appGid", cfg.appGid, 0, 4_294_967_295);
     if (cfg.hookReserveFraction !== undefined) {

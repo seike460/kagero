@@ -1,9 +1,9 @@
 # kagero — Lambda MicroVMs design
 
-> English translation of [microvms.md](microvms.md) (Japanese is canonical). Last synced: 2026-09-27.
+> English translation of [microvms.md](microvms.md) (Japanese is canonical). Last synced: 2026-09-29.
 
 - Status: implementation is ahead of this document ([ADR-012](../decisions.en.md)). The details will be finalized based on the results of PoC-01 through PoC-05.
-- Last updated: 2026-09-26
+- Last updated: 2026-09-29
 - Related documents: [Overall design](architecture.en.md) / [ADRs](../decisions.en.md) / [Research chapter 1 (Japanese)](../research/2026-09-landscape.md#1-aws-lambda-microvms)
 
 ## 1. Purpose
@@ -146,19 +146,25 @@ sequenceDiagram
 - At build time (`/ready`, `/validate`), fail toward stopping: if either the app or kagero fails, the build fails.
 - At runtime, fail toward not stopping the workload: even if kagero fails, the app's result is returned. Failures are recorded as `degraded` events.
 - If the app returns 404, the hook is treated as "not implemented" and counted as a success.
-- The same hook for the same MicroVM is processed only once. Hooks are processed one at a time, in order.
+- `ready`, `validate`, `run`, and `terminate` remember their first successful result. When the same hook arrives again, it is not processed again; the remembered result is returned. A hook that failed is processed again the next time it arrives.
+- `suspend` and `resume` arrive on every suspend/resume cycle, so they are processed every time.
+- Hooks are processed one at a time, in order.
 - `runHookPayload` is passed to the app unmodified and is never written to logs.
 
 ### 5-4. Ports
 
-| Port | Bound to | Purpose |
-|---|---|---|
-| Hook | Where Lambda can reach | Receives hooks from Lambda. Not included in the auth-token allowed ports |
-| App hook | loopback | Relay from kagero to the app |
-| OTLP | loopback | From the app to the collector |
-| Admin | loopback | Health checks and internal state |
+| Port | Env var (default) | Bound to | Purpose |
+|---|---|---|---|
+| Hook | `KAGERO_HOOK_PORT` (2018) | Where Lambda can reach | Receives hooks from Lambda. Not included in the auth-token allowed ports |
+| App hook | `KAGERO_APP_HOOK_PORT` (2019) | loopback | Relay from kagero to the app |
+| OTLP | `KAGERO_OTLP_PORT` (4318) | loopback | From the app to the collector |
+| Admin | `KAGERO_ADMIN_PORT` (2020) | loopback | Health checks and internal state |
+
+Each port is an integer from 1 to 65535. The four values and 4317, which the collector uses for OTLP/gRPC, must all differ. With 0, the OS picks a free port, which no longer matches the value given to the app, the collector and Hooks. So kagero refuses an out-of-range value or a collision at startup, and the error names the variable. The CDK `hookPort` checks the same range at synth time (`cdk synth`).
 
 That the hook port is unreachable from outside is verified in [PoC-02 (Japanese)](../poc/02-hook-contract.md).
+
+The hook port listens on all interfaces. With `KAGERO_HOOK_ALLOWED_PEERS` unset, kagero rejects only loopback peers, so the app can forge hooks by connecting to the MicroVM's own IP. This is a remaining risk. PoC-02 confirms Lambda's source addresses, and setting them as the allowlist closes it ([threat model](architecture.en.md#9-threat-model)).
 
 ## 6. Static at build, started at `/run` ([ADR-005](../decisions.en.md#adr-005-quiesce-at-build-arm-on-run))
 
@@ -203,6 +209,7 @@ Options not adopted:
 
 - `service.instance.id` is set to the `microvmId` received at `/run`.
 - Tenant and session IDs are attached only when the app explicitly opts in. They are extracted when `runHookPayload` is JSON and the extraction location (a JSON Pointer, e.g. `/tenant/id`) is configured.
+- IDs keep only ASCII alphanumerics and `._-@:/+=`. IDs are embedded in config files and shell-sourced files, so every other character is removed. An ID with nothing left is not attached.
 - Identity attributes are overwritten on the collector side, so values spoofed by the app do not survive.
 - IDs are attached to logs and traces only — never to metrics.
 
@@ -225,7 +232,7 @@ Outputs:
 - Per-MicroVM and per-tenant cost is computed from the summary logs.
 - Suspend storage cost is computed from the suspend duration and the snapshot size. Whether the snapshot size can be obtained is unconfirmed (PoC-09).
 
-## 10. Distribution and usage (planned)
+## 10. Distribution and usage
 
 `kagero` is distributed as an OCI image. Users pull it in with `COPY --from` in their Dockerfile.
 
@@ -240,7 +247,8 @@ CMD ["/app/start"]
 
 - Non-secret settings (backend type, endpoint, baseline, hook time limit) are passed via image environment variables.
 - Secrets are fetched from Secrets Manager at `/run` ([ADR-011](../decisions.en.md#adr-011-secret-delivery)).
-- The MicrovmImage Hooks are set to kagero's hook port. This will be packaged into a CDK construct in v0.5.
+- The MicrovmImage Hooks are set to kagero's hook port. The CDK construct `KageroMicrovmImage` (`packages/cdk`) sets the hook port, the hook time limits, and kagero's environment variables from one set of values. `packages/cdk` is not published to npm, so use it from this repository (npm publication is planned for v0.5).
+- The image also carries kagero's `/LICENSE` and the license texts of the crates and the Rust standard library built into the binary (`/licenses`). When you distribute your own image, copy them in with `COPY --from` as well.
 
 ## 11. Open questions
 

@@ -51,6 +51,21 @@ Rendered by `crates/kagero-agent::collector::render_template`. Leftover
 | `{{KAGERO_RESOURCE_ATTRS}}` | OTel `resource` actions for logs/traces (full identity incl. ids) |
 | `{{KAGERO_METRIC_ATTRS}}` | same list, registry-allowed subset only (ADR-008) |
 
+Endpoint values (`KAGERO_OTLP_ENDPOINT*`, `KAGERO_ENDPOINT_CW_*`) are
+substituted verbatim into double-quoted YAML/river strings and into env
+files that a shell sources. The agent therefore refuses to start when
+one is not printable ASCII or contains `"`, `\`, `$` or a backtick —
+percent-encode such characters in the URL.
+
+Each endpoint value, and `KAGERO_IMDS_ENDPOINT`, must also be an
+absolute `http://` or `https://` URL with a host
+(`https://otlp.example.com`, not `otlp.example.com:4318`). Otherwise the
+agent refuses to start with an error that names the variable. An empty
+value counts as unset. The startup log (`kagero starting`) shows only
+the scheme and the host (with port) of each URL: userinfo becomes
+`REDACTED@`, and a path, query or fragment becomes `/REDACTED`, since
+any of them can carry a token.
+
 ### Secret expansion safety
 
 `{{KAGERO_SECRET:...}}` and `{{KAGERO_SECRET}}` are expanded **only on the
@@ -72,20 +87,49 @@ by a shell. A secret *value* containing the literal `{{KAGERO_` mark
 trips the leftover-placeholder check and fails the render — pick
 secrets without that substring. CloudWatch needs no secret — the
 collector's `sigv4auth` extension signs with the execution role
-(ADR-011).
+(ADR-011). The permissions that role needs are listed under CloudWatch
+prerequisites.
+
+## CloudWatch prerequisites
+
+The CloudWatch templates (`cloudwatch/collector.yaml.tmpl` and
+`rotel/cloudwatch.env.tmpl`) rely on AWS resources that kagero neither
+creates nor grants. Set them up before the first `/run`; without them,
+AWS rejects the exports.
+
+- **Log group and log stream.** The CloudWatch Logs OTLP endpoint writes
+  only to a log group and log stream that already exist. Create the log
+  group `/kagero/<image-name>` (`KAGERO_MICROVM_IMAGE_NAME`) and the log
+  stream `otlp` in it. Every MicroVM of the image writes to that one
+  stream. The OTel Collector template tells them apart by resource
+  attributes; the Rotel template does not (see Unverified below).
+- **Execution role.** The collector signs with the MicroVM's execution
+  role (`--execution-role-arn` of `run-microvm`). With the OTel Collector
+  template, the role needs:
+  - `logs:PutLogEvents` on
+    `arn:aws:logs:<region>:<account>:log-group:/kagero/<image-name>:*`
+  - `cloudwatch:PutMetricData` on `*`
+  - `xray:PutTraceSegments` and `xray:PutSpans` on `*`. The X-Ray OTLP
+    endpoint also needs Transaction Search enabled in the account.
+
+  The Rotel template sends metrics and traces with `awsemf` and
+  `awsxray`, whose permissions are not confirmed yet (PoC-04/05). AWS's
+  collector setup guide attaches `CloudWatchAgentServerPolicy`, which
+  covers them. PoC-01 and PoC-05 confirm the minimal set.
 
 ## Identity filtering (ADR-008)
 
-Ids are stamped at **resource** level (`resource` processor /
-`otelcol.processor.transform` with `context = "resource"`), not record
-level — resource attributes are what Prometheus-style ingestion turns
-into labels. The metrics pipeline
-additionally deletes every id-shaped key the app may have claimed on its
-own resource (`service.instance.id`, `faas.instance`, `kagero.tenant.id`,
-`kagero.session.id`, …) at resource, datapoint AND scope level — scope
-attributes surface as `otel_scope_*` labels on Prometheus-compatible
-ingestion. Logs and traces get the full identity via `upsert`,
-overwriting app self-claims.
+The OTel Collector and Alloy templates stamp ids at **resource** level
+(`resource` processor / `otelcol.processor.transform` with
+`context = "resource"`), not record level — resource attributes are
+what Prometheus-style ingestion turns into labels. Their metrics
+pipeline additionally deletes every id-shaped key the app may have
+claimed on its own resource (`service.instance.id`, `faas.instance`,
+`kagero.tenant.id`, `kagero.session.id`, …) at resource, datapoint AND
+scope level — scope attributes surface as `otel_scope_*` labels on
+Prometheus-compatible ingestion. Logs and traces get the full identity
+via `upsert`, overwriting app self-claims. The Rotel templates do none
+of this (see the Rotel caveats under Unverified).
 
 ## Spawn contract
 
@@ -108,16 +152,22 @@ all.
 `KAGERO_COLLECTOR_START` (`build`/`run`), `KAGERO_COLLECTOR_RELOAD_URL`,
 `KAGERO_BACKEND`, `KAGERO_SECRET_ARN`.
 
+`KAGERO_COLLECTOR_START=build` starts the collector before the snapshot.
+When `KAGERO_SECRET_ARN` is also set, the first start waits for `/run`,
+because the rendered config needs the secret that `/run` fetches.
+
 ## Unverified (PoC)
 
 - Alloy vs Rotel memory/startup/reload comparison — PoC-04.
 - CloudWatch OTLP SigV4 service name, log-group headers — PoC-05.
+  The minimal execution-role permissions — PoC-01 / PoC-05.
 - Rotel caveats: batch internals prevent full ADR-006 synchronicity, and
   `ROTEL_OTEL_RESOURCE_ATTRIBUTES` applies to ALL signals with no
-  per-signal scoping. To stay ADR-008-safe the shipped Rotel templates
-  stamp only metric-safe attributes — **instance/tenant/session ids are
-  not attached at all on the Rotel path**, so per-VM drilldown of
-  logs/traces is unavailable there (the MicroVM id still lands on the
-  CloudWatch log-stream name). Full identity requires the OTel Collector
-  or Alloy templates. Re-verify Rotel's per-signal support in PoC-04
-  before extending this.
+  per-signal scoping. The shipped Rotel templates therefore stamp only
+  metric-safe attributes — **instance/tenant/session ids are not
+  attached at all on the Rotel path**, so per-VM drilldown of
+  logs/traces is unavailable there. They also **strip nothing**: ids
+  that the app sets on its own telemetry (`service.instance.id`, for
+  example) reach the metric labels, against ADR-008. Full identity and
+  the strip require the OTel Collector or Alloy templates. Re-verify
+  Rotel's per-signal support in PoC-04 before extending this.

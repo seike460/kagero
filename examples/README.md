@@ -40,26 +40,51 @@ collector never exports (you'd only see a `kagero.lifecycle.degraded`
 event). For auth-free local testing, swap in a template without
 `otelcol.auth.basic` — see `collector/README.md`.
 
+## A word on the hook port
+
+The agent's hook port listens on all interfaces. With
+`KAGERO_HOOK_ALLOWED_PEERS` unset, it rejects loopback peers only, so
+the app can still forge hooks such as `/run` or `/terminate` by
+connecting to the MicroVM's own IP. This risk stays open until PoC-02
+confirms the addresses Lambda sends hooks from; then set them as the
+allowlist (`hookAllowedPeers` in `KageroMicrovmImage`).
+
 ## Build
 
-`COPY --from=ghcr.io/seike460/kagero:0.1` needs the published image —
-until v0.1 is out, build the agent locally and copy it into context
-(`cargo build --release && cp target/release/kagero kagero`), then
-switch that line to `COPY kagero /usr/local/bin/kagero`
-(`target/` is dockerignored, so the binary must sit at context root).
-
-Then, from the repo root (the collector template must be in context):
+From the repo root (the collector template must be in context):
 
 ```sh
-docker build -f examples/node/Dockerfile -t kagero-example-node .
-docker build -f examples/python/Dockerfile -t kagero-example-python .
+docker build --platform linux/arm64 -f examples/node/Dockerfile -t kagero-example-node .
+docker build --platform linux/arm64 -f examples/python/Dockerfile -t kagero-example-python .
 ```
 
-Each image pins `grafana/alloy:v1.20.0` as the collector. Set
-`KAGERO_OTLP_ENDPOINT_LGTM` (or `_CLOUDWATCH`) to a real endpoint —
-`https://otlp.invalid` is a placeholder that fails visibly; pointing
-at `localhost:4318` would loop telemetry back into the collector's
-own receiver.
+The images are arm64 only: the `al2023-minimal` base and the agent
+image `ghcr.io/seike460/kagero:0.1` are published for `linux/arm64`
+alone, so an x86_64 host needs QEMU emulation (binfmt).
+
+To try agent changes that are not released yet, build the static
+arm64 binary with the release Dockerfile — it lands at the context
+root as `kagero` — and replace the `COPY --from=ghcr.io/seike460/kagero:0.1`
+line with `COPY kagero /usr/local/bin/kagero`:
+
+```sh
+docker build --platform linux/arm64 -f docker/agent.Dockerfile -o . .
+```
+
+(`cargo build` on the host builds for the host: a binary built on
+macOS or x86_64 does not run in the arm64 image.)
+
+Each image pins `grafana/alloy:v1.20.0` as the collector with the
+LGTM-only Alloy template. Set `KAGERO_OTLP_ENDPOINT_LGTM` to a real
+endpoint — `https://otlp.invalid` is a placeholder that fails
+visibly; pointing at `localhost:4318` would loop telemetry back into
+the collector's own receiver. For CloudWatch, replace the collector:
+copy in `otelcol-contrib` and `collector/cloudwatch/collector.yaml.tmpl`,
+and set `KAGERO_BACKEND=cloudwatch`, `KAGERO_COLLECTOR_BIN` and
+`KAGERO_COLLECTOR_ARGS` to match (see the spawn contract in
+`collector/README.md`). CloudWatch also needs a log group, a log stream
+and execution-role permissions set up in advance (see "CloudWatch
+prerequisites" in the same file).
 
 ## Deploy
 

@@ -4,6 +4,12 @@
  * shape: source "aws.lambda", detail-type "Durable Execution Status
  * Change". A DLQ catches notifications that fail even after the
  * EventBridge retries.
+ *
+ * Scope: the rule matches durable executions of every function in the
+ * account and region, so the role may read the history of all of them
+ * (lambda:GetDurableExecutionHistory on `function:*`). The history is
+ * fetched with IncludeExecutionData=false — step names, status and
+ * timing, never payloads. There is no per-function filter today.
  */
 
 import { createRequire } from "node:module";
@@ -19,6 +25,7 @@ import {
   aws_events_targets as targets,
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
+import { checkBaseUrl } from "./base-url.js";
 import { grantSecretRead } from "./secrets.js";
 
 const require_ = createRequire(import.meta.url);
@@ -31,6 +38,11 @@ export interface KageroDurableStitcherProps {
    * deployments). Required for `lgtm`; for `cloudwatch` it is the shared
    * endpoint override — unset means region-derived AWS defaults.
    * Ignored when `backend` is "both" (use the per-backend props).
+   * Every endpoint prop is a base URL: the stitcher appends /v1/traces
+   * and /v1/metrics, so it may carry a prefix path but no query,
+   * fragment or userinfo (`OtlpTarget.endpoint` in
+   * packages/durable-stitcher). Any other shape fails synth; an
+   * unresolved CDK token is checked by the handler at init instead.
    */
   otlpEndpoint?: string;
   /**
@@ -38,6 +50,9 @@ export interface KageroDurableStitcherProps {
    * KAGERO_OTLP_ENDPOINT_CLOUDWATCH — the LGTM endpoint is required;
    * the CloudWatch side may be omitted to use region-derived AWS
    * defaults (see packages/durable-stitcher handlerFromEnv).
+   * `cloudwatch` and `both` grant the role xray:PutTraceSegments,
+   * xray:PutSpans and cloudwatch:PutMetricData; the X-Ray OTLP
+   * endpoint also needs Transaction Search enabled in the account.
    */
   backend: "lgtm" | "cloudwatch" | "both";
   /** LGTM endpoint — required when backend is "both". */
@@ -71,7 +86,8 @@ export interface KageroDurableStitcherProps {
   sigv4ServiceMetrics?: string;
   /**
    * Secrets Manager ARN holding the "Name: value" write-scoped OTLP
-   * header. The ARN lands in env (ADR-011 allows references); the
+   * header for the LGTM target. The CloudWatch target never receives it
+   * (SigV4 only). The ARN lands in env (ADR-011 allows references); the
    * handler resolves it via Secrets Manager at cold start.
    */
   otlpHeaderSecretArn?: string;
@@ -98,9 +114,21 @@ export class KageroDurableStitcher extends Construct {
       // region (AWS_REGION is always set on Lambda); lgtm cannot.
       throw new Error("KageroDurableStitcher requires otlpEndpoint for the lgtm backend");
     }
+    // The handler refuses these at init; fail synth instead.
+    for (const [label, v] of [
+      ["otlpEndpoint", props.otlpEndpoint],
+      ["otlpEndpointLgtm", props.otlpEndpointLgtm],
+      ["otlpEndpointCloudwatch", props.otlpEndpointCloudwatch],
+      ["otlpEndpointCloudwatchTraces", props.otlpEndpointCloudwatchTraces],
+      ["otlpEndpointCloudwatchMetrics", props.otlpEndpointCloudwatchMetrics],
+      ["otlpEndpointCloudwatchLogs", props.otlpEndpointCloudwatchLogs],
+    ] as const) {
+      if (v) checkBaseUrl(`KageroDurableStitcher ${label}`, v);
+    }
 
     this.deadLetterQueue =
-      props.deadLetterQueue ?? new sqs.Queue(this, "Dlq", { retentionPeriod: Duration.days(14) });
+      props.deadLetterQueue ??
+      new sqs.Queue(this, "Dlq", { retentionPeriod: Duration.days(14), enforceSSL: true });
 
     this.fn = new nodejs.NodejsFunction(this, "Fn", {
       entry:
@@ -171,6 +199,20 @@ export class KageroDurableStitcher extends Construct {
         ],
       }),
     );
+
+    // The handler SigV4-signs its CloudWatch posts with this role:
+    // traces to xray.<region>, metrics to monitoring.<region>. AWS's
+    // OTLP setup guides grant PutTraceSegments (CloudWatchAgentServerPolicy)
+    // while the service authorization reference lists PutSpans for
+    // OTLP spans — grant both. X-Ray's Put actions take no resource ARN.
+    if (props.backend !== "lgtm") {
+      this.fn.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["xray:PutTraceSegments", "xray:PutSpans", "cloudwatch:PutMetricData"],
+          resources: ["*"],
+        }),
+      );
+    }
 
     this.rule = new events.Rule(this, "StatusRule", {
       eventPattern: {

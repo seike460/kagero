@@ -11,7 +11,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -21,7 +21,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::app::{App, RelayOutcome};
 use crate::collector::{Collector, RenderContext};
-use crate::config::Config;
+use crate::config::{Config, PeerRule};
 use crate::identity::{Identity, identity_from_run_body};
 use crate::process::Reaper;
 use crate::secrets::fetch_secret;
@@ -39,6 +39,10 @@ const REPEATABLE_HOOKS: &[&str] = &["suspend", "resume"];
 const MAX_CONN: usize = 32;
 /// Request body cap — runHookPayload is small; huge bodies are hostile.
 const MAX_BODY: usize = 1 << 20;
+
+/// Status code and JSON body Lambda sees, plus the `kagero.hook.status`
+/// the hook-result counter records.
+type HookReply = (StatusCode, Value, sem::HookStatus);
 
 pub struct Agent {
     pub cfg: Config,
@@ -133,7 +137,7 @@ impl Agent {
             return (*code, payload.clone());
         }
 
-        let (code, payload) = match hook {
+        let (code, payload, status) = match hook {
             "ready" | "validate" => self.handle_build_hook(hook, body, deadline).await,
             "run" => self.handle_run(body, deadline).await,
             "suspend" => self.handle_suspend(body, deadline).await,
@@ -143,7 +147,11 @@ impl Agent {
             // today — return 404 rather than unreachable!() anyway: a
             // panic here would take down PID 1 if a future caller
             // bypasses route()'s filter.
-            _ => (StatusCode::NOT_FOUND, json!({"error": "unknown hook"})),
+            _ => (
+                StatusCode::NOT_FOUND,
+                json!({"error": "unknown hook"}),
+                sem::HookStatus::Error,
+            ),
         };
         if !repeatable
             && code.is_success()
@@ -157,7 +165,6 @@ impl Agent {
         // skipped entirely when the hook budget is already spent (a
         // zero-timeout POST would just inflate the failure counter).
         if RUNTIME_HOOKS.contains(&hook) {
-            let status = if code.is_success() { "ok" } else { "error" };
             let budget = self.remaining(deadline).min(Duration::from_secs(2));
             if !budget.is_zero() {
                 let _ = self.otlp.hook_result(hook, status, budget).await;
@@ -204,30 +211,21 @@ impl Agent {
 
     /// /ready and /validate: app first, then kagero's own build checks.
     /// Failures fail the build (fail-stop), unlike runtime hooks.
-    async fn handle_build_hook(
-        &self,
-        hook: &str,
-        body: &[u8],
-        deadline: Instant,
-    ) -> (StatusCode, Value) {
+    async fn handle_build_hook(&self, hook: &str, body: &[u8], deadline: Instant) -> HookReply {
         let out = self.relay_to_app(hook, body, deadline).await;
-        match out {
-            RelayOutcome::Failed(code, text) => (
-                StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_GATEWAY),
-                json!({"app_error": text}),
-            ),
-            _ => {
-                // kagero-side build check: the collector template must render.
-                if let Err(e) = self.build_check() {
-                    error!(?e, hook, "kagero build check failed");
-                    return (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        json!({"kagero_error": format!("{e:#}")}),
-                    );
-                }
-                (StatusCode::OK, json!({"status": "ok"}))
-            }
+        if matches!(out, RelayOutcome::TimedOut(_) | RelayOutcome::Failed(_, _)) {
+            return self.app_response(out);
         }
+        // kagero-side build check: the collector template must render.
+        if let Err(e) = self.build_check() {
+            error!(?e, hook, "kagero build check failed");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"kagero_error": format!("{e:#}")}),
+                sem::HookStatus::Error,
+            );
+        }
+        (StatusCode::OK, json!({"status": "ok"}), hook_status(&out))
     }
 
     fn build_check(&self) -> Result<()> {
@@ -254,28 +252,38 @@ impl Agent {
 
     /// The hook response Lambda sees: the app's verdict on success, a 502
     /// carrying its error body otherwise.
-    fn app_response(&self, out: RelayOutcome) -> (StatusCode, Value) {
+    fn app_response(&self, out: RelayOutcome) -> HookReply {
+        let status = hook_status(&out);
         match out {
             RelayOutcome::Failed(code, text) => (
                 StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_GATEWAY),
                 json!({"app_error": text}),
+                status,
             ),
-            _ => (
+            RelayOutcome::TimedOut(text) => {
+                (StatusCode::BAD_GATEWAY, json!({"app_error": text}), status)
+            }
+            RelayOutcome::Ok | RelayOutcome::Unimplemented | RelayOutcome::NoListener => (
                 StatusCode::OK,
                 json!({"status": "ok", "app_exited": self.app.had_exited()}),
+                status,
             ),
         }
     }
 
     /// /run: kagero first (identity → secrets → collector → usage → run event),
     /// then relay to the app so its first telemetry already carries identity.
-    async fn handle_run(&self, body: &[u8], deadline: Instant) -> (StatusCode, Value) {
+    async fn handle_run(&self, body: &[u8], deadline: Instant) -> HookReply {
         let parsed: Value = match serde_json::from_slice(body) {
             Ok(v) => v,
             Err(e) => {
                 self.degraded("run", &format!("bad /run body: {e:#}"), deadline)
                     .await;
-                return (StatusCode::BAD_REQUEST, json!({"error": "invalid json"}));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json!({"error": "invalid json"}),
+                    sem::HookStatus::Error,
+                );
             }
         };
         let id = identity_from_run_body(
@@ -379,7 +387,7 @@ impl Agent {
 
     /// /suspend: app first (flush), then kagero sends the usage summary and
     /// the suspend event with synchronous export (ADR-006).
-    async fn handle_suspend(&self, body: &[u8], deadline: Instant) -> (StatusCode, Value) {
+    async fn handle_suspend(&self, body: &[u8], deadline: Instant) -> HookReply {
         let app_out = self.relay_to_app("suspend", body, deadline).await;
 
         self.usage.mark_suspend().await;
@@ -405,7 +413,7 @@ impl Agent {
 
     /// /resume: kagero first (bookkeeping → reconnect), then app, then the
     /// lifecycle event records what actually happened (§4-3 sequence).
-    async fn handle_resume(&self, body: &[u8], deadline: Instant) -> (StatusCode, Value) {
+    async fn handle_resume(&self, body: &[u8], deadline: Instant) -> HookReply {
         let suspended_secs = self.usage.mark_resume().await;
 
         // Clock skew: a huge delta indicates the wall clock is not settled
@@ -476,7 +484,7 @@ impl Agent {
 
     /// /terminate: app first (flush), then final summary + terminate event,
     /// then SIGTERM the collector and the app (ADR-006 order).
-    async fn handle_terminate(&self, body: &[u8], deadline: Instant) -> (StatusCode, Value) {
+    async fn handle_terminate(&self, body: &[u8], deadline: Instant) -> HookReply {
         let app_out = self.relay_to_app("terminate", body, deadline).await;
 
         // Close any open suspend interval before the final accounting.
@@ -589,7 +597,7 @@ impl Agent {
         );
         fields.insert(
             sem::ATTR_KAGERO_USAGE_SUSPEND_SECONDS.into(),
-            json!(snap.suspend_seconds),
+            json!(snap.suspend_sum),
         );
         fields.insert(sem::ATTR_KAGERO_USAGE_SUSPENDS.into(), json!(snap.suspends));
         fields.insert(sem::ATTR_KAGERO_USAGE_RESUMES.into(), json!(snap.resumes));
@@ -606,29 +614,55 @@ fn app_result_str(o: &RelayOutcome) -> &'static str {
         RelayOutcome::Ok => sem::AppResult::Ok,
         RelayOutcome::Unimplemented => sem::AppResult::Unimplemented,
         RelayOutcome::NoListener => sem::AppResult::NoListener,
-        RelayOutcome::Failed(_, _) => sem::AppResult::Failed,
+        RelayOutcome::TimedOut(_) | RelayOutcome::Failed(_, _) => sem::AppResult::Failed,
     }
     .as_str()
 }
 
-/// Serve the hook endpoint on `addr` until the process dies.
+/// `kagero.hook.status` for the hook-result counter. A hook-less app
+/// (404 or nothing listening) counts as unimplemented, not as ok.
+fn hook_status(o: &RelayOutcome) -> sem::HookStatus {
+    match o {
+        RelayOutcome::Ok => sem::HookStatus::Ok,
+        RelayOutcome::Unimplemented | RelayOutcome::NoListener => sem::HookStatus::Unimplemented,
+        RelayOutcome::TimedOut(_) => sem::HookStatus::Timeout,
+        RelayOutcome::Failed(_, _) => sem::HookStatus::Error,
+    }
+}
+
+/// Whether `ip` may call the hook port.
+fn peer_allowed(allow: &[PeerRule], ip: IpAddr) -> bool {
+    if allow.is_empty() {
+        // No allowlist: the strongest safe default is denying loopback —
+        // only the in-VM app can appear as one. The app could still forge
+        // via the VM's own primary IP; closing that needs the real source
+        // list (PoC-02).
+        !ip.is_loopback()
+    } else {
+        allow.iter().any(|p| p.contains(&ip))
+    }
+}
+
+/// Serve the hook endpoint on `listener` until the process dies.
 /// `accept()` failures are logged and retried with backoff — propagating an
 /// error here would kill PID 1 (and the whole MicroVM) on e.g. EMFILE from
 /// a hostile peer, and the untrusted app can reach this port.
-pub async fn serve(agent: std::sync::Arc<Agent>, addr: SocketAddr) -> Result<()> {
-    let listener = TcpListener::bind(addr).await?;
+pub async fn serve(agent: std::sync::Arc<Agent>, listener: TcpListener) -> ! {
     let conn_cap = std::sync::Arc::new(Semaphore::new(MAX_CONN));
     let allow = agent.cfg.hook_allowed_peers.clone();
     if allow.is_empty() {
         warn!(
             "KAGERO_HOOK_ALLOWED_PEERS unset — rejecting loopback peers only. \
                A loopback source can only be the in-VM app, which is untrusted \
-               (it could forge /terminate). Genuine hooks arrive from outside \
-               the MicroVM; set the allowlist once PoC-02 confirms Lambda's \
-               source addresses"
+               (it could forge /terminate), but the app can still reach this \
+               port through the MicroVM's own IP. Genuine hooks arrive from \
+               outside the MicroVM; set the allowlist once PoC-02 confirms \
+               Lambda's source addresses"
         );
     }
-    info!(%addr, "hook server listening");
+    if let Ok(addr) = listener.local_addr() {
+        info!(%addr, "hook server listening");
+    }
     // A connection can never legitimately outlive its request's hook
     // deadline (+slack for header/body transit). Keep-alive is off —
     // hooks are rare lifecycle calls, and an idle keep-alive connection
@@ -650,16 +684,7 @@ pub async fn serve(agent: std::sync::Arc<Agent>, addr: SocketAddr) -> Result<()>
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
-                let allowed = if allow.is_empty() {
-                    // No allowlist: the strongest safe default is denying
-                    // loopback — only the in-VM app can appear as one. The
-                    // app could still forge via the VM's own primary IP;
-                    // closing that needs the real source list (PoC-02).
-                    !peer.ip().is_loopback()
-                } else {
-                    allow.iter().any(|p| p.contains(&peer.ip()))
-                };
-                if !allowed {
+                if !peer_allowed(&allow, peer.ip()) {
                     warn!(%peer, "hook connection from disallowed peer, dropping");
                     continue;
                 }
@@ -688,10 +713,14 @@ pub async fn serve(agent: std::sync::Arc<Agent>, addr: SocketAddr) -> Result<()>
     }
 }
 
-async fn route(
+async fn route<B>(
     agent: std::sync::Arc<Agent>,
-    req: Request<Incoming>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    req: Request<B>,
+) -> Result<Response<Full<Bytes>>, hyper::Error>
+where
+    B: hyper::body::Body,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     let path = req.uri().path().to_string();
     if req.method() != Method::POST || !path.starts_with(HOOK_PREFIX) {
         return Ok(resp(StatusCode::NOT_FOUND, json!({"error": "not found"})));
@@ -778,14 +807,14 @@ async fn serve_http1<S>(
 /// The loopback bind is NOT a trust boundary — the untrusted app can
 /// reach it — so it gets the same connection hygiene as the hook port:
 /// bounded concurrency, no keep-alive, capped lifetime.
-pub async fn serve_admin(agent: std::sync::Arc<Agent>, addr: SocketAddr) -> Result<()> {
-    let listener = TcpListener::bind(addr).await?;
+pub async fn serve_admin(agent: std::sync::Arc<Agent>, listener: TcpListener) -> ! {
     let conn_cap = std::sync::Arc::new(Semaphore::new(8));
     const CONN_LIFE: Duration = Duration::from_secs(10);
     loop {
         let (stream, peer) = match listener.accept().await {
             Ok(x) => x,
-            Err(_) => {
+            Err(e) => {
+                warn!(?e, "admin accept failed; continuing");
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 continue;
             }
@@ -810,5 +839,196 @@ pub async fn serve_admin(agent: std::sync::Arc<Agent>, addr: SocketAddr) -> Resu
             });
             serve_http1(stream, svc, CONN_LIFE, peer).await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::tests::fake_app;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const APP_OK: &str = "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+    const APP_FAIL: &str =
+        "HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+
+    /// A loopback port nothing listens on: OTLP posts and relays sent
+    /// there fail fast instead of reaching a real local service.
+    fn closed_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    fn agent(edit: impl FnOnce(&mut Config)) -> Arc<Agent> {
+        let mut cfg = crate::config::fixture();
+        cfg.otlp_port = closed_port();
+        cfg.app_hook_port = closed_port();
+        edit(&mut cfg);
+        Arc::new(Agent::new(cfg, Reaper::idle()))
+    }
+
+    fn post<B>(hook: &str, body: B) -> Request<B> {
+        Request::post(format!("{HOOK_PREFIX}{hook}"))
+            .body(body)
+            .unwrap()
+    }
+
+    /// A request body that never delivers a byte.
+    struct Stalled;
+
+    impl hyper::body::Body for Stalled {
+        type Data = Bytes;
+        type Error = std::convert::Infallible;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+        ) -> Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+            Poll::Pending
+        }
+    }
+
+    #[test]
+    fn peer_allowed_denies_loopback_without_an_allowlist() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert!(!peer_allowed(&[], ip("127.0.0.1")));
+        assert!(!peer_allowed(&[], ip("::1")));
+        assert!(peer_allowed(&[], ip("10.0.0.5")));
+        let listed = [PeerRule::parse("10.0.0.0/8").unwrap()];
+        assert!(peer_allowed(&listed, ip("10.1.2.3")));
+        assert!(!peer_allowed(&listed, ip("192.168.0.1")));
+        assert!(!peer_allowed(&listed, ip("127.0.0.1")));
+        let loopback = [PeerRule::parse("127.0.0.0/8").unwrap()];
+        assert!(peer_allowed(&loopback, ip("127.0.0.1")));
+    }
+
+    /// The accept loop itself: a disallowed peer is closed without a
+    /// single HTTP byte; an allowed one gets an answer.
+    #[tokio::test]
+    async fn serve_closes_disallowed_peers_before_http() {
+        for (allow, answered) in [
+            (vec![], false),
+            (vec![PeerRule::parse("127.0.0.0/8").unwrap()], true),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tokio::spawn(serve(agent(|c| c.hook_allowed_peers = allow), listener));
+            let mut conn = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            let _ = conn
+                .write_all(b"GET / HTTP/1.1\r\nhost: kagero\r\n\r\n")
+                .await;
+            let mut reply = Vec::new();
+            let _ = tokio::time::timeout(Duration::from_secs(5), conn.read_to_end(&mut reply))
+                .await
+                .expect("the hook port neither answered nor closed");
+            let reply = String::from_utf8_lossy(&reply);
+            if answered {
+                assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
+            } else {
+                assert!(reply.is_empty(), "{reply}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn route_rejects_unknown_paths_before_reading_the_body() {
+        let a = agent(|_| {});
+        let get = Request::get(format!("{HOOK_PREFIX}run"))
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        let elsewhere = Request::post("/other")
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        for req in [get, elsewhere] {
+            let status = route(a.clone(), req).await.unwrap().status();
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
+        // Reading the stalled body would end in 408 after the hook budget.
+        let status = route(a, post("bogus", Stalled)).await.unwrap().status();
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn route_caps_the_body_size_and_read_time() {
+        let a = agent(|c| {
+            c.hook_timeouts
+                .insert("ready".into(), Duration::from_millis(100));
+        });
+        let big = post("ready", Full::new(Bytes::from(vec![b'x'; MAX_BODY + 1])));
+        let status = route(a.clone(), big).await.unwrap().status();
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        let status = route(a, post("ready", Stalled)).await.unwrap().status();
+        assert_eq!(status, StatusCode::REQUEST_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn run_with_invalid_json_is_rejected_and_stays_rerunnable() {
+        let a = agent(|_| {});
+        let (code, _) = a.handle_hook("run", b"not json").await;
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        let (code, _) = a.handle_hook("run", br#"{"microvmId":"mvm-1"}"#).await;
+        assert_eq!(code, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn duplicate_hook_replays_the_first_success() {
+        let (port, hits) = fake_app(Some(APP_OK.into())).await;
+        let a = agent(|c| c.app_hook_port = port);
+        let first = a.handle_hook("ready", b"{}").await;
+        let second = a.handle_hook("ready", b"{}").await;
+        assert_eq!(first.0, StatusCode::OK);
+        assert_eq!(first, second);
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "a replay reached the app");
+    }
+
+    #[tokio::test]
+    async fn failed_and_repeatable_hooks_run_again() {
+        let (port, hits) = fake_app(Some(APP_FAIL.into())).await;
+        let a = agent(|c| c.app_hook_port = port);
+        for _ in 0..2 {
+            let (code, _) = a.handle_hook("validate", b"{}").await;
+            assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+        let (port, hits) = fake_app(Some(APP_OK.into())).await;
+        let a = agent(|c| c.app_hook_port = port);
+        for _ in 0..2 {
+            let (code, _) = a.handle_hook("suspend", b"{}").await;
+            assert_eq!(code, StatusCode::OK);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    /// The counter must be able to carry every registry value of
+    /// kagero.hook.status — a value the agent never sends would leave
+    /// dashboards built on it empty.
+    #[test]
+    fn hook_status_distinguishes_every_relay_outcome() {
+        assert_eq!(hook_status(&RelayOutcome::Ok), sem::HookStatus::Ok);
+        assert_eq!(
+            hook_status(&RelayOutcome::Unimplemented),
+            sem::HookStatus::Unimplemented
+        );
+        assert_eq!(
+            hook_status(&RelayOutcome::NoListener),
+            sem::HookStatus::Unimplemented
+        );
+        assert_eq!(
+            hook_status(&RelayOutcome::TimedOut(String::new())),
+            sem::HookStatus::Timeout
+        );
+        assert_eq!(
+            hook_status(&RelayOutcome::Failed(500, String::new())),
+            sem::HookStatus::Error
+        );
     }
 }

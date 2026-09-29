@@ -7,7 +7,7 @@
       "service": "microvm",
       "region": "us-east-1",
       "arch": "arm64",
-      "effectiveFrom": "2026-06-09",
+      "effectiveFrom": "2026-06-22",
       "verified": true,
       "source": "AWS Lambda pricing page (2026-09); ARM prices only were published",
       "prices": {
@@ -22,7 +22,7 @@
       "service": "microvm",
       "region": "ap-northeast-1",
       "arch": "arm64",
-      "effectiveFrom": "2026-06-09",
+      "effectiveFrom": "2026-06-22",
       "verified": false,
       "source": "UNVERIFIED — Tokyo prices not confirmable on the pricing page (PoC-09); us-east-1 values used as placeholder",
       "prices": {

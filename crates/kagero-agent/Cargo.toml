@@ -3,8 +3,11 @@ name = "kagero-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "kagero agent: hook relay and telemetry supervisor running as PID 1 inside AWS Lambda MicroVMs"
+# Shipped as the ghcr.io/seike460/kagero image, not as a crate.
+publish = false
 
 [[bin]]
 name = "kagero"

@@ -11,7 +11,7 @@
             "severity": "warning"
           },
           "annotations": {
-            "summary": "kagero agent took the degraded path (relay/flush/collector failure)"
+            "summary": "kagero agent took the degraded path (a kagero-side step failed, e.g. secret fetch, collector or OTLP export; app relay failures are not counted)"
           }
         },
         {
@@ -22,7 +22,7 @@
             "severity": "warning"
           },
           "annotations": {
-            "summary": "no MicroVM telemetry reaching the backend while the fleet should be active"
+            "summary": "no MicroVM telemetry for 10m — also fires when no MicroVM is RUNNING (all suspended or terminated), so use it on fleets that should always be active"
           }
         },
         {

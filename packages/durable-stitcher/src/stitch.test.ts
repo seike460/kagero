@@ -225,7 +225,7 @@ describe("parseEventBridge (verified event shape)", () => {
 });
 
 describe("normalizeApiResponse (real API shape)", () => {
-  it("derives execution facts from Execution* events and pages concatenated", () => {
+  it("derives execution facts from Execution* events", () => {
     const r = normalizeApiResponse(ARN, {
       Events: [
         { EventId: 1, EventType: "ExecutionStarted", EventTimestamp: 1750000000 },
@@ -433,6 +433,25 @@ describe("stitchNotification", () => {
     ]);
   });
 
+  it("appends the signal path to the endpoint's prefix path", async () => {
+    // The OtlpTarget.endpoint shape: trailing slashes are dropped and
+    // /v1/<signal> is appended to the prefix path.
+    const urls: string[] = [];
+    await stitchNotification(terminalEvent, {
+      fetcher: fixtureFetcher(rec),
+      targets: [{ endpoint: "https://gw.example.com/otlp//", backend: "lgtm" as const }],
+      send: {
+        async post(url) {
+          urls.push(url);
+        },
+      },
+    });
+    expect(urls).toEqual([
+      "https://gw.example.com/otlp/v1/traces",
+      "https://gw.example.com/otlp/v1/metrics",
+    ]);
+  });
+
   it("routes cloudwatch signals to per-signal endpoints", async () => {
     const urls: string[] = [];
     const cwTarget = {
@@ -521,6 +540,94 @@ describe("stitchNotification", () => {
     expect(() => handlerFromEnv({ KAGERO_BACKEND: "cloudwatch" })).toThrow(
       /cloudwatch backend needs/,
     );
+  });
+
+  describe("handlerFromEnv checks every endpoint setting at init", () => {
+    // Each setting under a backend that reads it. Tokens sit in the
+    // userinfo, the path, the query and the fragment.
+    const CW = { KAGERO_BACKEND: "cloudwatch", AWS_REGION: "us-east-1" };
+    const SETTINGS: [string, NodeJS.ProcessEnv][] = [
+      ["KAGERO_OTLP_ENDPOINT", { KAGERO_BACKEND: "lgtm" }],
+      ["KAGERO_OTLP_ENDPOINT_LGTM", { KAGERO_BACKEND: "both", AWS_REGION: "us-east-1" }],
+      ["KAGERO_OTLP_ENDPOINT_CLOUDWATCH", CW],
+      ["KAGERO_OTLP_ENDPOINT_CLOUDWATCH_TRACES", CW],
+      ["KAGERO_OTLP_ENDPOINT_CLOUDWATCH_METRICS", CW],
+      ["KAGERO_OTLP_ENDPOINT_CLOUDWATCH_LOGS", CW],
+    ];
+    const REJECTED: [string, string][] = [
+      ["query", "https://otlp.example.com/path-tok?q=query-tok"],
+      ["empty query", "https://otlp.example.com/path-tok?"],
+      ["fragment", "https://otlp.example.com/path-tok#frag-tok"],
+      ["userinfo", "https://user:pw-tok@otlp.example.com/path-tok"],
+      ["empty userinfo", "https://@otlp.example.com/path-tok"],
+      ["no scheme", "otlp.example.com:4318/path-tok"],
+      ["non-http scheme", "ftp://otlp.example.com/path-tok"],
+      ["no host", "https:///path-tok"],
+      ["no slashes", "https:otlp.example.com/path-tok"],
+      ["trailing whitespace", "https://otlp.example.com/path-tok "],
+      ["control character", "https://otlp.example.com/path-tok\n"],
+      ["port out of range", "https://otlp.example.com:99999/path-tok"],
+    ];
+
+    for (const [shape, value] of REJECTED) {
+      it(`refuses an endpoint with ${shape}, naming the setting but not the value`, () => {
+        for (const [key, env] of SETTINGS) {
+          const base =
+            key === "KAGERO_OTLP_ENDPOINT_LGTM"
+              ? env
+              : { ...env, KAGERO_OTLP_ENDPOINT: "https://otlp.example.com" };
+          let msg = "";
+          try {
+            handlerFromEnv({ ...base, [key]: value });
+          } catch (e) {
+            msg = String(e);
+          }
+          expect(msg, key).toBe(
+            `Error: ${key} must be an absolute http:// or https:// URL with a host, ` +
+              "and no query, fragment, userinfo or whitespace",
+          );
+          for (const t of ["pw-tok", "path-tok", "query-tok", "frag-tok"]) {
+            expect(msg, `${t} leaked`).not.toContain(t);
+          }
+        }
+      });
+    }
+
+    it("accepts a base URL with or without a prefix path and trailing slash", () => {
+      for (const value of [
+        "https://otlp.example.com",
+        "https://otlp.example.com/",
+        "http://127.0.0.1:4318",
+        "http://[::1]:4318/",
+        "https://gw.example.com/otlp",
+        "https://gw.example.com/otlp/",
+        "HTTPS://OTLP.EXAMPLE.COM:443/otlp",
+      ]) {
+        for (const [key, env] of SETTINGS) {
+          expect(() => handlerFromEnv({ ...env, [key]: value }), `${key}=${value}`).not.toThrow();
+        }
+      }
+    });
+
+    it("refuses a region that makes an invalid CloudWatch default, without the value", () => {
+      for (const key of ["KAGERO_AWS_REGION", "AWS_REGION"]) {
+        let msg = "";
+        try {
+          handlerFromEnv({ KAGERO_BACKEND: "cloudwatch", [key]: "us-east-1?q=query-tok" });
+        } catch (e) {
+          msg = String(e);
+        }
+        expect(msg).toBe(`Error: ${key} does not make a valid CloudWatch OTLP endpoint URL`);
+      }
+      // A shared endpoint replaces every default, so the region is unused.
+      expect(() =>
+        handlerFromEnv({
+          KAGERO_BACKEND: "cloudwatch",
+          AWS_REGION: "us-east-1?q=query-tok",
+          KAGERO_OTLP_ENDPOINT_CLOUDWATCH: "https://vpce.example.com",
+        }),
+      ).not.toThrow();
+    });
   });
 
   it("resolveCwEndpoints orders per-signal → shared → region-derived", () => {

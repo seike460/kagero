@@ -63,6 +63,10 @@ export function spanIdFor(traceId: string, key: string): string {
   return sha(`${traceId}/${key}`).slice(0, 16);
 }
 
+function eventSpanId(traceId: string, eventId: string): string {
+  return spanIdFor(traceId, `event/${eventId}`);
+}
+
 function nanos(d: Date): string {
   return `${BigInt(d.getTime()) * 1_000_000n}`;
 }
@@ -116,7 +120,7 @@ export function assembleTrace(rec: ExecutionRecord): AssembledTrace {
   const rootSpanId = spanIdFor(traceId, "execution");
   const replays = replayCount(rec);
 
-  const endNanos = rec.endTime ?? latestEnd(rec.events) ?? rec.startTime;
+  const end = rec.endTime ?? latestEnd(rec.events) ?? rec.startTime;
   const rootAttrs: OtlpAttr[] = [
     ...attrs({
       [ATTR_KAGERO_DURABLE_EXECUTION_ARN]: rec.executionArn,
@@ -133,14 +137,14 @@ export function assembleTrace(rec: ExecutionRecord): AssembledTrace {
     name: rec.name ?? `durable ${shortArn(rec.executionArn)}`,
     kind: SPAN_KIND_SERVER,
     startTimeUnixNano: nanos(rec.startTime),
-    endTimeUnixNano: nanos(endNanos),
+    endTimeUnixNano: nanos(end),
     attributes: rootAttrs,
     status: { code: statusCode(rec.status) },
   };
 
   const spanIdByEventId = new Map<string, string>();
   const sorted = [...rec.events].sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
-  for (const e of sorted) spanIdByEventId.set(e.id, spanIdFor(traceId, `event/${e.id}`));
+  for (const e of sorted) spanIdByEventId.set(e.id, eventSpanId(traceId, e.id));
 
   const children: StitchedSpan[] = sorted.map((e) =>
     childSpan(traceId, rootSpanId, e, spanIdByEventId),
@@ -163,7 +167,7 @@ function childSpan(
   });
   const span: StitchedSpan = {
     traceId,
-    spanId: spanIdByEventId.get(e.id) ?? spanIdFor(traceId, `event/${e.id}`),
+    spanId: eventSpanId(traceId, e.id),
     parentSpanId: (e.parentId && spanIdByEventId.get(e.parentId)) ?? rootSpanId,
     name: e.name ? `${e.kind}: ${e.name}` : e.kind,
     kind: SPAN_KIND_INTERNAL,

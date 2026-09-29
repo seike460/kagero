@@ -1,8 +1,9 @@
 /**
  * OTLP/HTTP exporter for stitched traces and derived metrics.
- * LGTM: plain POST. CloudWatch: SigV4-signed POST (service "monitoring",
- * same as the collector template). The endpoint is always injected —
- * no backend URL is hardcoded here.
+ * LGTM: plain POST. CloudWatch: SigV4-signed POST, with the service per
+ * signal as in the collector template — traces "xray", metrics
+ * "monitoring" (overridable per signal). The endpoint is always
+ * injected — no backend URL is hardcoded here.
  */
 
 import {
@@ -16,13 +17,21 @@ import { canonicalQuery, credsFromEnv, signRequest } from "./sigv4.js";
 import { type AssembledTrace, durationSeconds, replayCount } from "./stitch.js";
 
 export interface OtlpTarget {
-  /** Base endpoint, e.g. "https://otlp.example.com" (no path). */
+  /**
+   * Base URL: an http(s) scheme, a host, an optional port and an
+   * optional prefix path, e.g. "https://otlp.example.com" or
+   * "https://gw.example.com/otlp". Trailing slashes are dropped and
+   * "/v1/traces" or "/v1/metrics" is appended as text, so the URL takes
+   * no query or fragment (it would precede the signal path) and no
+   * userinfo (fetch refuses it; credentials go in `headers`).
+   * handlerFromEnv refuses any other shape at init.
+   */
   endpoint: string;
   /**
-   * Per-signal endpoint overrides. CloudWatch OTLP endpoints differ per
-   * signal (xray.<region> for traces, monitoring.<region> for metrics,
-   * logs.<region> for logs — AWS OTLP endpoints doc); a single base
-   * cannot reach all three.
+   * Per-signal endpoint overrides, in the same shape. CloudWatch OTLP
+   * endpoints differ per signal (xray.<region> for traces,
+   * monitoring.<region> for metrics, logs.<region> for logs — AWS OTLP
+   * endpoints doc); a single base cannot reach all three.
    */
   endpointTraces?: string;
   endpointMetrics?: string;
@@ -43,19 +52,50 @@ export interface Send {
   post(url: string, body: Buffer, headers: Record<string, string>): Promise<void>;
 }
 
-/** Injectable transport — tests inject a mock, production uses fetch. */
+/** Where a POST went, for errors: scheme and host (with port) only.
+ * The endpoint is configurable, and its userinfo, path or query may
+ * carry a token; userinfo shows as `REDACTED@`. */
+function originOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.username || u.password ? "REDACTED@" : ""}${u.host}`;
+  } catch {
+    return "an invalid URL";
+  }
+}
+
+/** Why fetch failed, without its message: some messages quote the whole
+ * URL ("Failed to parse URL from …", "…includes credentials: …"). The
+ * error name and the network error code (ECONNREFUSED, ENOTFOUND…) do
+ * not. */
+function fetchFailure(e: unknown): string {
+  if (!(e instanceof Error)) return "unknown error";
+  const code = (e.cause as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" ? `${e.name} (${code})` : e.name;
+}
+
+/** Injectable transport — tests inject a mock, production uses fetch.
+ * Errors name the scheme and host and the HTTP status (or the kind of
+ * network failure), never the path, the query or the response body — a
+ * server may echo the request line in its body. */
 export function httpSend(timeoutMs = 5000): Send {
   return {
     async post(url, body, headers) {
-      const res = await fetch(url, {
-        method: "POST",
-        headers,
-        body,
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers,
+          body,
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (e) {
+        throw new Error(`OTLP POST to ${originOf(url)} failed: ${fetchFailure(e)}`);
+      }
       if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`OTLP POST ${url} → ${res.status}: ${text.slice(0, 200)}`);
+        // Release the connection; the body is not reported (see above).
+        await res.body?.cancel().catch(() => {});
+        throw new Error(`OTLP POST to ${originOf(url)} returned HTTP ${res.status}`);
       }
     },
   };
@@ -94,9 +134,10 @@ function headersFor(
   const creds = credsFromEnv();
   if (!creds) throw new Error("cloudwatch backend needs AWS credentials in the environment");
   if (!target.region) throw new Error("cloudwatch backend needs a region for SigV4");
-  // Sign the path the request actually takes — an endpoint may carry a
-  // prefix path (e.g. behind a proxy) and/or query. The query must be
-  // canonicalized (RFC3986-encoded, sorted) or the signature mismatches.
+  // Sign the URL the request goes to. Its path includes the endpoint's
+  // prefix path (e.g. behind a proxy). An endpoint takes no query, but a
+  // query in the URL is still signed in canonical form (RFC3986-encoded,
+  // sorted), so the signature always matches what is sent.
   const u = new URL(url);
   return signRequest(
     {
@@ -164,15 +205,18 @@ const DURABLE_BOUNDS = [1, 5, 10, 30, 60, 300, 600, 1800, 3600];
  * totals — a cumulative series reporting `asInt: 1` per record would be
  * flat forever (increase() = 0) and a cumulative `replays` would report
  * only the CURRENT execution's count, under-counting everywhere.
- * Delta lets the backend accumulate correctly (Prometheus OTLP ingest
- * converts delta→cumulative and applies `_total`).
+ * The backend must accept delta: Prometheus converts delta→cumulative on
+ * OTLP ingest only with the experimental `otlp-deltatocumulative` feature
+ * flag, and Mimir rejects delta by default. Otherwise a collector with the
+ * `deltatocumulative` processor has to sit in front (README "Backends";
+ * PoC-05/08 verify the real backends).
  *
  * The delta WINDOW is the execution's own [startTime, endTime] — not
  * [startTime, now]. OTel requires non-overlapping delta windows per
  * series; running to "now" would overlap the windows of concurrent
  * same-status executions. An execution window can still overlap a
  * *different* execution's window (durable runs do overlap); that edge is
- * bounded by Prometheus' delta→cumulative tolerance and is PoC-05 data.
+ * bounded by the delta→cumulative converter's tolerance and is PoC-05 data.
  */
 export function metricsPayload(
   rec: ExecutionRecord,
@@ -253,6 +297,22 @@ export function metricsPayload(
   };
 }
 
+/** POST one signal. A failure names the signal around the message of
+ * headersFor or the transport — httpSend keeps the URL out of its own. */
+async function postSignal(
+  s: Send,
+  target: OtlpTarget,
+  signal: Signal,
+  body: Buffer,
+): Promise<void> {
+  const url = `${signalBase(target, signal)}/v1/${signal}`;
+  try {
+    await s.post(url, body, headersFor(target, url, body, signal));
+  } catch (e) {
+    throw new Error(`${signal} export failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 /** Send a trace + its derived metrics. Failures throw — caller decides. */
 export async function exportRecord(
   trace: AssembledTrace,
@@ -263,8 +323,6 @@ export async function exportRecord(
   const s = send ?? httpSend(target.timeoutMs ?? 5000);
   const traces = Buffer.from(JSON.stringify(tracesPayload(trace)), "utf8");
   const metrics = Buffer.from(JSON.stringify(metricsPayload(rec)), "utf8");
-  const traceUrl = `${signalBase(target, "traces")}/v1/traces`;
-  await s.post(traceUrl, traces, headersFor(target, traceUrl, traces, "traces"));
-  const metricUrl = `${signalBase(target, "metrics")}/v1/metrics`;
-  await s.post(metricUrl, metrics, headersFor(target, metricUrl, metrics, "metrics"));
+  await postSignal(s, target, "traces", traces);
+  await postSignal(s, target, "metrics", metrics);
 }

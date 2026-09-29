@@ -68,7 +68,7 @@ export const microvmOverview: DashboardSpec = {
   uid: "kagero-microvm-overview",
   title: "kagero — MicroVM Overview",
   description:
-    "Lambda MicroVM fleet health: lifecycle, burst usage, suspend/resume latency, cost estimate, logs and traces. All cost figures are ESTIMATES (ADR-009).",
+    "Lambda MicroVM fleet health: lifecycle, burst usage, suspend duration, cost estimate and logs. All cost figures are ESTIMATES (ADR-009). Known limitation: the metric panels overshoot while two or more MicroVMs of one image run at once — ids stay off metric labels (ADR-008), so their counters share one series (PoC-05).",
   tags: ["kagero", "lambda", "microvm"],
   refresh: "1m",
   constants: [
@@ -144,7 +144,7 @@ export const microvmOverview: DashboardSpec = {
           kind: "timeseries",
           title: "Degraded events (fail-soft)",
           description:
-            "Lifecycle steps the agent could not complete cleanly — relay timeouts, collector errors, OTLP flush failures. Should stay 0. Counts only events that reached the OTLP path — when the collector itself is down the sole record is the stdout fallback (see the platform-logs panel in the Logs row; CloudWatch only).",
+            "Steps kagero itself could not complete cleanly, such as a secret fetch, a collector start/reconnect/stop or an OTLP export. App relay failures and timeouts are not degraded events — kagero.microvm.hook_results counts them (status error/timeout). Should stay 0. Counts only events that reached the OTLP path — when the collector itself is down the sole record is the stdout fallback (see the platform-logs panel in the Logs row; CloudWatch only).",
           span: 12,
           height: 6,
           unit: "ops",
@@ -165,7 +165,7 @@ export const microvmOverview: DashboardSpec = {
           kind: "timeseries",
           title: "Estimated compute cost (USD/hour)",
           description:
-            "ESTIMATE — baseline + burst at us-east-1 ARM list prices; excludes snapshot IO/storage, data transfer, free tier. Other regions are UNVERIFIED (PoC-09). Reconcile against CUR.",
+            "ESTIMATE — baseline + burst at us-east-1 ARM list prices; excludes snapshot IO/storage, data transfer, free tier. Other regions are UNVERIFIED (PoC-09). Reconcile against CUR. Overshoots while two or more MicroVMs of one image run at once — their counters share one series (PoC-05).",
           span: 16,
           height: 8,
           unit: "currencyUSD",
@@ -229,7 +229,6 @@ export const microvmOverview: DashboardSpec = {
         {
           kind: "traces",
           title: "MicroVM lifecycle traces",
-          description: "Tempo traces for kagero spans (hook relay, flush).",
           span: 24,
           height: 9,
           recipes: ["microvm-traces"],

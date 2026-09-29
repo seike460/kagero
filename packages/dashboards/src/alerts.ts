@@ -25,7 +25,8 @@ export const alertRules: AlertRuleSpec[] = [
     name: "KageroDegradedLifecycle",
     severity: "warning",
     forSeconds: 300,
-    summary: "kagero agent took the degraded path (relay/flush/collector failure)",
+    summary:
+      "kagero agent took the degraded path (a kagero-side step failed, e.g. secret fetch, collector or OTLP export; app relay failures are not counted)",
     expr: (m) =>
       `sum(increase(${m("kagero.microvm.lifecycle_transitions")}{kagero_lifecycle_event="degraded"}[${RI}])) > 0`,
   },
@@ -33,9 +34,11 @@ export const alertRules: AlertRuleSpec[] = [
     name: "KageroNoMicrovmTelemetry",
     severity: "warning",
     forSeconds: 600,
-    summary: "no MicroVM telemetry reaching the backend while the fleet should be active",
+    summary:
+      "no MicroVM telemetry for 10m — also fires when no MicroVM is RUNNING (all suspended or terminated), so use it on fleets that should always be active",
     // running_seconds is pushed every USAGE_PUSH_INTERVAL (60s) while
-    // RUNNING plus on suspend/terminate — 10m absent means really absent.
+    // RUNNING plus on suspend/terminate, so it is also absent when the
+    // whole fleet is idle (scale-to-zero).
     expr: (m) => `absent_over_time(${m("kagero.microvm.running_seconds")}[10m])`,
   },
   {

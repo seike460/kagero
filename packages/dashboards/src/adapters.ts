@@ -107,7 +107,7 @@ export const cloudwatchAdapter: BackendAdapter = {
     {
       name: "KAGERO_PLATFORM_LOG_GROUP",
       label: "MicroVM platform log group",
-      value: "/aws/lambda/<function-name>",
+      value: "/aws/lambda-microvms/<image-name>",
     },
   ],
 };
