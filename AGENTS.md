@@ -5,7 +5,8 @@
 ## このリポジトリ
 
 - kagero は、Grafana で AWS Lambda ファミリーを見るための OSS です。
-- リリース前です。実装は `crates/` と `packages/` にあり、CI と simulator の E2E で検証しています。AWS の実機での PoC はまだです（逸脱の記録は ADR-012）。
+- 0.x のプレビューを公開しています。公開した版と変更点は `CHANGELOG.md` にあります。配布物は、エージェントのイメージ `ghcr.io/seike460/kagero` だけです。`packages/*` は npm に公開していません。
+- 実装は `crates/` と `packages/` にあり、CI と simulator の E2E で検証しています。AWS の実機での PoC はまだです（逸脱の記録は ADR-012）。
 - 設計の正本は `docs/` にあります。作業の前に、`docs/design/architecture.md` と `docs/decisions.md` を読みます。
 
 ## いまの段階でしてよいこと・しないこと

@@ -184,6 +184,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   templates keep ADR-008. They strip no attributes, so ids that the app
   sets on its own telemetry reach the metric labels. Only the OTel
   Collector and Alloy templates strip them.
+- **Docs**: the READMEs name the v0.1.0 release and show how to copy
+  the agent from `ghcr.io/seike460/kagero` into a MicroVM image. They
+  said that no release had been published. They also say now that the
+  alerts work on LGTM only, and that the counters of several MicroVMs of
+  one image collide.
 
 ## [0.1.0] — 2026-09-28
 

@@ -2,7 +2,7 @@
 
 kagero は、Grafana で AWS Lambda ファミリーを見るための可観測性キットです。対象は Lambda MicroVMs・Lambda 関数・Durable Functions・k6 の負荷試験です。送り先は、LGTM と Amazon CloudWatch の両方に対応します。
 
-**状態: リリース前です。** 下のモジュールは実装済みで、CI（ユニットテスト、実際のエージェントバイナリを駆動する simulator の E2E、型検査、lint、生成物の差分検査）を通っています。まだリリースは出していません。**AWS の実機での PoC はまだ実行していません**。実機でしか分からない性質（タイムアウトの実値・資格情報の到達範囲・料金の実額・スナップショットの実挙動）は未検証です。「PoC を先に」という決めごとからの逸脱は [ADR-012](docs/decisions.md) に記録しています。詳しくは[ロードマップ](docs/roadmap.md)をご覧ください。
+**状態: プレビューです。** 2026-09-28 に v0.1.0（MicroVMs プレビュー）を公開しました。エージェントは、コンテナイメージ `ghcr.io/seike460/kagero`（linux/arm64）として配布しています。TypeScript のパッケージは npm に公開していません。このリポジトリを checkout して使います。下のモジュールは実装済みで、CI（ユニットテスト、実際のエージェントバイナリを駆動する simulator の E2E、型検査、lint、生成物の差分検査）を通っています。ただし、**AWS の実機での PoC はまだ実行していません**。実機でしか分からない性質（タイムアウトの実値・資格情報の到達範囲・料金の実額・スナップショットの実挙動）は未検証です。「PoC を先に」という決めごとからの逸脱は [ADR-012](docs/decisions.md) に記録しています。詳しくは[ロードマップ](docs/roadmap.md)と[変更履歴](CHANGELOG.md)をご覧ください。
 
 [English README](README.md)
 
@@ -19,11 +19,13 @@ kagero は、Grafana で AWS Lambda ファミリーを見るための可観測�
 | モジュール | すること | 目標 | 実装 |
 |---|---|---|---|
 | A. MicroVMs | Rust 製の小さなエージェント `kagero` が、コンテナの起動役として動きます。フックを決まった順で中継し、MicroVM ごとに識別情報を付け、停止と終了の前にテレメトリを送り切り、コスト推定のための使用量を記録します | v0.1（プレビュー） | `crates/kagero-agent` — 実装済み。simulator の E2E で検証。実機 PoC は未実施 |
-| B. Lambda 関数 | PromQL と OpenTelemetry を前提にしたダッシュボードとアラートを用意します。コールドスタートと INIT の費用も分析します。Managed Instances にも対応します | v0.2 | `packages/dashboards` + `packages/pricing` — MicroVM 概要のダッシュボードとアラートは実装済みで、生成した v1 JSON を CI で検査。`docs/design/functions-durable-k6.md` の関数レベルのダッシュボード・アラート MVP は**まだ未実装** |
+| B. Lambda 関数 | PromQL と OpenTelemetry を前提にしたダッシュボードとアラートを用意します。コールドスタートと INIT の費用も分析します。Managed Instances にも対応します | v0.2 | `packages/dashboards` + `packages/pricing` — MicroVM 概要のダッシュボード（両方のバックエンド）とアラート（LGTM のみ。CloudWatch 向けは「非対応」と示す manifest）は実装済みで、生成した v1 JSON を CI で検査。`docs/design/functions-durable-k6.md` の関数レベルのダッシュボード・アラート MVP は**まだ未実装** |
 | D. Durable Functions | 再実行を含む 1 つの実行を、Tempo か X-Ray で 1 本の trace として見せます | v0.3（実験） | `packages/durable-stitcher` — 実装済み。API の形は AWS のドキュメントで裏付け。実イベントは未検証 |
 | C. k6 | Lambda 関数（15 分以内の分割）と MicroVMs（最長 8 時間）で k6 を大規模に動かし、結果を送り先に届けます | v0.4（実験） | `packages/k6-runner` — 枠組みは実装済み（Distributed Map による分割、EMF/OTLP/annotation の出力）。長時間実行向けの MicroVM 起動経路は**まだ未実装**。実実行は未検証。k6 本体（AGPL-3.0）は同梱しません。`KageroK6Run` の worker に、`bin/k6` とテストのスクリプトを置く layer を足します |
 
 支える部品は `packages/sim`（実際のエージェントを駆動するフック simulator）、`packages/secrets`（Secrets Manager の解決）、`packages/cdk`（`KageroMicrovmImage`・`KageroDurableStitcher`・`KageroK6Run`）、`collector/`（LGTM と CloudWatch 向けの Alloy・OTel テンプレート）、`semconv/` + `packages/semconv`（属性の正本と、Rust・TypeScript の定数を出す生成器）、`examples/`（Node.js と Python の MicroVM イメージ）です。
+
+**既知の制約:** 同じイメージの MicroVM が 2 台以上同時に動くと、ダッシュボードのメトリクスのパネルは、実際より大きな値を示します。コストの推定も同じです。ADR-008 で ID をメトリクスのラベルから外したため、各台の累積カウンタが 1 つの系列に混ざります。`rate()` と `increase()` は、これをカウンタのリセットと読みます。直し方は PoC-05 で決めます。
 
 ## 送り先（バックエンド）
 
@@ -56,6 +58,20 @@ durable-stitcher は、メトリクス（`kagero.durable.*`）を delta temporal
 - **MicroVM の中は Rust です**（エージェント `kagero` だけ）。メモリとスナップショットを小さく保てます。どのイメージにも単一の静的バイナリで入れられます。プロセスと権限を直接操作できます。
 - **それ以外は TypeScript（Node.js 24）です。** 制御用の Lambda、AWS CDK の constructs、Grafana Foundation SDK によるダッシュボード生成、フックの simulator が対象です。
 
+## 使い方
+
+エージェントは、`linux/arm64` 向けのイメージ `ghcr.io/seike460/kagero` として公開しています。リリースごとに、版と minor のタグが付きます（v0.1.0 では `0.1.0` と `0.1`）。`latest` は、リリースのたびに動きます。MicroVM のイメージにバイナリをコピーし、エントリポイントにします。アプリは、そのコマンドとして渡します。
+
+```dockerfile
+FROM public.ecr.aws/lambda/microvms:al2023-minimal
+COPY --from=ghcr.io/seike460/kagero:0.1 /kagero /usr/local/bin/kagero
+COPY . /app
+ENTRYPOINT ["/usr/local/bin/kagero", "--"]
+CMD ["/app/start"]
+```
+
+動かすには、収集器とその設定テンプレート、エージェントの設定も要ります。[`examples/`](examples/README.ja.md) に、Node.js と Python の完全なイメージがあります。設定の一覧は [`examples/kagero.env.example`](examples/kagero.env.example) にあります。エージェントのイメージには、`/LICENSE` と `/licenses` も入っています。バイナリに組み込んだコードのライセンス文です。自分のイメージを配布するときは、これもコピーしてください。
+
 ## 開発
 
 道具の版は [mise](https://mise.jdx.dev/) で固定しています。
@@ -66,6 +82,9 @@ pnpm install
 pnpm build            # パッケージのビルド（テストの前に必要）
 cargo build -p kagero-agent  # simulator の E2E に必要
 pnpm test             # 単体テスト + simulator の E2E
+# 任意: 実物の otelcol-contrib を通して E2E を実行し、
+# collector 側の属性の削除を端から端まで確かめる
+KAGERO_SIM_COLLECTOR_BIN=/path/to/otelcol-contrib pnpm --filter @kagero/sim sim:e2e
 pnpm lint && pnpm typecheck
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings
 pnpm generate         # semconv の定数とダッシュボードを再生成
