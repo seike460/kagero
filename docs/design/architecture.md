@@ -95,7 +95,7 @@ kagero/
 - Rust の主な crate（実装済み）: tokio、hyper、serde、reqwest（rustls）、libc。
 - TypeScript: strict、ES modules、Biome、vitest、pnpm を使います。制御用の Lambda は CDK の `NodejsFunction` でデプロイします。
 - 属性の定義: Weaver 互換スキーマの YAML を正本にし、`packages/semconv` の生成器が Rust と TypeScript の定数と文書を出します（OpenTelemetry Weaver 本体への移行経路は残しています）。
-- 版の固定: mise で道具の版を固定します。依存の更新は Renovate に任せます。
+- 版の固定: mise で道具の版を固定します。依存の更新は Renovate に任せる予定です。まだ設定していないため、いまは手で更新します。
 - CI: GitHub Actions を使います。ARM64 の Linux ランナー（`ubuntu-24.04-arm`）でビルドとテストを行っています。
 
 ## 5. 2 つのバックエンド
@@ -188,7 +188,7 @@ kagero/
 | フックと管理用のポート | アプリが先に取り、kagero の代わりに答える | kagero は、アプリを起動する前に両方のポートを確保します |
 | OTLP のポート（4318/4317） | 収集器より先にアプリが取り、kagero の使用量とライフサイクルの記録を受け取って捨てる | 残る危険です。収集器を `/run` で起動する設定（既定）では、先に動くアプリがポートを取れます。このとき収集器は起動に失敗し、標準出力に `child exited on its own` の警告が出ます。収集器を起動する時期は、ADR-005 の PoC-03 と PoC-04 で決めます |
 | エージェント自体 | ALL 権限のアプリに止められる | ALL 権限は、eBPF を使う人だけの opt-in にします。アプリの権限は、エージェントが起動時に落とします |
-| 配布物 | 改ざんされる | cosign で署名し、SBOM を付けます。依存の版を固定します |
+| 配布物 | 改ざんされる | 依存の版を固定します（`Cargo.lock` と `pnpm-lock.yaml`。イメージのビルドは `cargo build --locked`）。CI とリリースの action は commit SHA で、ビルド用のベースイメージは digest で固定します。公開したイメージに付くのは、buildx が付ける SLSA provenance の attestation だけです。cosign の署名と SBOM は、まだ付けていません（予定） |
 
 ## 10. テスト
 
@@ -202,10 +202,10 @@ kagero/
 
 - 版: SemVer を使います。0.x の間は、モノレポ全体で 1 つの版にします。
 - 配布物:
-  - `kagero` バイナリ（`aarch64-unknown-linux-musl`）を GitHub Releases で配ります。
-  - OCI イメージを GHCR で配ります。利用者は `COPY --from` でバイナリを取り込みます。
-  - npm パッケージは `@seike460/` の下で公開します（CDK constructs などは v0.5 以降）。
+  - OCI イメージ `ghcr.io/seike460/kagero`（linux/arm64）を GHCR で配ります。`vX.Y.Z` の形のタグを push すると、release.yml が CI の全 job と版の一致を確かめてから公開します。利用者は `COPY --from` でバイナリを取り込みます。いま公開している配布物は、このイメージだけです。
+  - `kagero` バイナリ（`aarch64-unknown-linux-musl`）を GitHub Releases でも配る予定です。まだ添付していません。
+  - npm パッケージは `@seike460/` の下で公開する予定です（CDK constructs などは v0.5 以降）。いまのワークスペースのパッケージ名は `@kagero/*` で、すべて private です。公開するときに `@seike460/` へ改名します。
   - ダッシュボードは grafana.com で公開します（v0.2 以降）。
-- 署名と部品表: cosign（GitHub OIDC によるキーレス署名）で署名し、SBOM を付けます。
+- 署名と部品表: cosign（GitHub OIDC によるキーレス署名）での署名と、SBOM を付ける予定です。まだ付けていません。いまのイメージに付くのは、buildx の SLSA provenance の attestation だけです。
 - 依存の確認: Rust は cargo-deny でライセンスと脆弱性を確かめる方針です。
 - 同梱物のライセンス: Alloy と OBI は Apache-2.0 です。k6 は AGPL-3.0 なので、改変せずに同梱し、ライセンス表示を付けます。

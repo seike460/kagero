@@ -194,6 +194,13 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   said that no release had been published. They also say now that the
   alerts work on LGTM only, and that the counters of several MicroVMs of
   one image collide.
+- **Docs**: the design docs no longer describe planned supply-chain
+  steps as done. The GHCR image is the only published artifact. A
+  binary on GitHub Releases, cosign signing and an SBOM are planned; the
+  image carries only the SLSA provenance attestation that buildx adds.
+  The threat model says the same. Renovate is not set up yet, and the
+  npm packages stay the private `@kagero/*` workspace packages until
+  they are published under `@seike460/`.
 
 ## [0.1.0] — 2026-09-28
 

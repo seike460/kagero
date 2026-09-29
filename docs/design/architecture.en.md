@@ -97,7 +97,7 @@ Tools:
 - Main Rust crates (already implemented): tokio, hyper, serde, reqwest (rustls), libc.
 - TypeScript: use strict mode, ES modules, Biome, vitest, and pnpm. Control Lambdas are deployed with CDK `NodejsFunction`.
 - Attribute definitions: the canonical source is a Weaver-compatible schema YAML; the generator in `packages/semconv` emits the Rust and TypeScript constants and the docs (a migration path to OpenTelemetry Weaver itself is kept).
-- Version pinning: pin tool versions with mise. Dependency updates are delegated to Renovate.
+- Version pinning: pin tool versions with mise. Dependency updates are to be delegated to Renovate; it is not set up yet, so updates are manual for now.
 - CI: GitHub Actions. Builds and tests run on ARM64 Linux runners (`ubuntu-24.04-arm`).
 
 ## 5. Two backends
@@ -190,7 +190,7 @@ Assumption: apps inside MicroVMs may be untrusted code (e.g., AI-generated code)
 | Hook and admin ports | App binds them first and answers in kagero's place | kagero binds both ports before it starts the app |
 | OTLP ports (4318/4317) | App binds them before the collector and receives, then drops, kagero's usage and lifecycle records | Remaining risk. When the collector starts at `/run` (the default), the app that is already running can take the ports. The collector then fails to start, and a `child exited on its own` warning appears on stdout. When to start the collector is decided by PoC-03 and PoC-04 under ADR-005 |
 | The agent itself | Stopped by an ALL-privileged app | ALL privileges are opt-in for eBPF users only. The agent drops the app's privileges at startup |
-| Artifacts | Tampering | Signed with cosign and shipped with an SBOM. Dependency versions pinned |
+| Artifacts | Tampering | Dependency versions are pinned (`Cargo.lock` and `pnpm-lock.yaml`; the image builds with `cargo build --locked`). CI and release actions are pinned by commit SHA, and the build base image by digest. The published image carries only the SLSA provenance attestation that buildx adds. cosign signing and an SBOM are not in place yet (planned) |
 
 ## 10. Testing
 
@@ -204,10 +204,10 @@ Assumption: apps inside MicroVMs may be untrusted code (e.g., AI-generated code)
 
 - Versioning: SemVer. During 0.x, the whole monorepo shares a single version.
 - Artifacts:
-  - The `kagero` binary (`aarch64-unknown-linux-musl`) is distributed via GitHub Releases.
-  - OCI images are distributed via GHCR; users pull the binary in with `COPY --from`.
-  - npm packages are published under `@seike460/` (CDK constructs and others from v0.5).
+  - The OCI image `ghcr.io/seike460/kagero` (linux/arm64) is distributed via GHCR. Pushing a `vX.Y.Z` tag makes release.yml publish it after every CI job passes and the tag matches the versions in the source. Users pull the binary in with `COPY --from`. This image is the only artifact published today.
+  - The `kagero` binary (`aarch64-unknown-linux-musl`) is also to be distributed via GitHub Releases. It is not attached yet.
+  - npm packages are to be published under `@seike460/` (CDK constructs and others from v0.5). The workspace packages are named `@kagero/*` today and are all private; they are renamed to `@seike460/` when published.
   - Dashboards are published on grafana.com (from v0.2).
-- Signing and SBOM: artifacts are signed with cosign (keyless signing via GitHub OIDC) and shipped with an SBOM.
+- Signing and SBOM: artifacts are to be signed with cosign (keyless signing via GitHub OIDC) and shipped with an SBOM. Neither is in place yet; the image carries only buildx's SLSA provenance attestation.
 - Dependency checks: the plan is to verify licenses and vulnerabilities for Rust with cargo-deny.
 - Bundled licenses: Alloy and OBI are Apache-2.0. k6 is AGPL-3.0, so it is bundled unmodified with a license notice.
