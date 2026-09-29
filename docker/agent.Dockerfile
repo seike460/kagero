@@ -1,6 +1,6 @@
-# kagero agent OCI image (docs/roadmap.md: v0.1 publishes the agent
-# image to GHCR). The image carries ONLY the statically linked binary —
-# consumers copy it into their own MicroVM image:
+# kagero agent OCI image (docs/design/architecture.md §11: the agent image
+# is published to GHCR). The image carries ONLY the statically linked
+# binary — consumers copy it into their own MicroVM image:
 #   COPY --from=ghcr.io/seike460/kagero:0.1 /kagero /usr/local/bin/kagero
 #
 # Alpine's rust toolchain is musl-native, so the release binary is

@@ -1,7 +1,7 @@
 name: release
 
 # Tag-triggered publish of the agent image to GHCR
-# (docs/roadmap.md: v0.1 ships ghcr.io/seike460/kagero). Semver tags
+# (docs/design/architecture.md §11: ghcr.io/seike460/kagero). Semver tags
 # v0.1.0 produce image tags 0.1.0 and 0.1 — the short tag is what the
 # examples' `COPY --from=` references.
 on:
