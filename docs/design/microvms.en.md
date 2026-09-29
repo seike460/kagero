@@ -153,12 +153,14 @@ sequenceDiagram
 
 ### 5-4. Ports
 
-| Port | Bound to | Purpose |
-|---|---|---|
-| Hook | Where Lambda can reach | Receives hooks from Lambda. Not included in the auth-token allowed ports |
-| App hook | loopback | Relay from kagero to the app |
-| OTLP | loopback | From the app to the collector |
-| Admin | loopback | Health checks and internal state |
+| Port | Env var (default) | Bound to | Purpose |
+|---|---|---|---|
+| Hook | `KAGERO_HOOK_PORT` (2018) | Where Lambda can reach | Receives hooks from Lambda. Not included in the auth-token allowed ports |
+| App hook | `KAGERO_APP_HOOK_PORT` (2019) | loopback | Relay from kagero to the app |
+| OTLP | `KAGERO_OTLP_PORT` (4318) | loopback | From the app to the collector |
+| Admin | `KAGERO_ADMIN_PORT` (2020) | loopback | Health checks and internal state |
+
+Each port is an integer from 1 to 65535. The four values and 4317, which the collector uses for OTLP/gRPC, must all differ. With 0, the OS picks a free port, which no longer matches the value given to the app, the collector and Hooks. So kagero refuses an out-of-range value or a collision at startup, and the error names the variable. The CDK `hookPort` checks the same range at synth time (`cdk synth`).
 
 That the hook port is unreachable from outside is verified in [PoC-02 (Japanese)](../poc/02-hook-contract.md).
 
