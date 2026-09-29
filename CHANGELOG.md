@@ -30,7 +30,8 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   RFC 6901 pointers, and `KAGERO_MICROVM_BASELINE_GIB` /
   `KAGERO_MICROVM_BASELINE_VCPU` must be positive finite numbers.
 - **CDK**: `KageroMicrovmImage` applies the same endpoint (including
-  `imdsEndpoint`), JSON Pointer and `hookPort` checks at synth time.
+  `imdsEndpoint`), JSON Pointer and `hookPort` checks at synth time. As
+  in the agent, an endpoint error names the prop but not its value.
 - **CDK**: `KageroMicrovmImage` rejects a `hookAllowedPeers` entry that
   is not an IP or CIDR at synth time. The agent already refused such an
   entry at boot.
@@ -103,6 +104,10 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   `cloudwatch:PutMetricData`. Before, AWS denied every export to the
   CloudWatch OTLP endpoints. Traces to X-Ray also need Transaction Search
   enabled in the account.
+- **CDK**: the synth-time error for a control character in a
+  `KageroMicrovmImage` value no longer prints the value. It names the
+  prop and the code point (for example `U+000A`), since an endpoint or
+  `collectorReloadUrl` can carry a token in its userinfo, path or query.
 - **CDK**: a Secrets Manager ARN passed as a token (for example
   `secret.secretArn`) is now granted as a complete ARN. Before, the grant
   added a `-??????` suffix that never matched, so `GetSecretValue` was

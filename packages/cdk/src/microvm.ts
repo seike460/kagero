@@ -186,25 +186,27 @@ function checkEnvSafe(label: string, v: string): void {
 
 /** Values rendered into collector YAML/river must not carry control
  *  chars — a `\n` (or NEL/U+2028 line break) corrupts the generated
- *  config (URLs need ?&%@ so the strict env_safe charset can't apply). */
+ *  config (URLs need ?&%@ so the strict env_safe charset can't apply).
+ *  The error names the code point, not the value: an endpoint or the
+ *  reload URL may carry a token in its userinfo, path or query. */
 function checkNoControlChars(label: string, v: string): void {
   for (const c of v) {
     const code = c.codePointAt(0) ?? 0;
     if (code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029) {
-      throw new Error(`${label} contains a control character: ${JSON.stringify(v)}`);
+      const hex = code.toString(16).toUpperCase().padStart(4, "0");
+      throw new Error(`${label} contains a control character (U+${hex})`);
     }
   }
 }
 
 /** Endpoints render into collector YAML/river and shell-sourced env
  *  files — mirror the agent's endpoint_safe so a bad value fails synth,
- *  not PID 1 at boot. */
+ *  not PID 1 at boot. Like the agent's errors, these name the prop but
+ *  not the value, which may carry a token. */
 function checkEndpoint(label: string, v: string): void {
   checkNoControlChars(label, v);
   if (!ENDPOINT_SAFE_RE.test(v) || ENDPOINT_UNSAFE_RE.test(v)) {
-    throw new Error(
-      `${label} must be printable ASCII without ", \\, $ or backtick: ${JSON.stringify(v)}`,
-    );
+    throw new Error(`${label} must be printable ASCII without ", \\, $ or backtick`);
   }
   // Empty is "unset" — the value is not emitted, and the agent treats
   // an empty endpoint as unset too.
@@ -227,9 +229,7 @@ function checkHttpUrl(label: string, v: string): void {
     }
   }
   if (!ok) {
-    throw new Error(
-      `${label} must be an absolute http:// or https:// URL with a host: ${JSON.stringify(v)}`,
-    );
+    throw new Error(`${label} must be an absolute http:// or https:// URL with a host`);
   }
 }
 

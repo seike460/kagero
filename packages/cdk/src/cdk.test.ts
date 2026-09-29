@@ -197,6 +197,56 @@ describe("kageroEnvironment", () => {
     expect(env.KAGERO_IMDS_ENDPOINT).toBe("http://[fd00:ec2::254]");
   });
 
+  it("keeps URL values out of synth errors, as the agent does at boot", () => {
+    // A token in the userinfo, the path and the query of each value.
+    const message = (f: () => unknown): string => {
+      try {
+        f();
+      } catch (e) {
+        return String(e);
+      }
+      throw new Error("expected a synth error");
+    };
+    const messages = [
+      message(() =>
+        kageroEnvironment({
+          ...baseKagero(),
+          otlpEndpointLgtm: "https://u:pw-tok@h/path-tok?q=query-tok\n",
+        }),
+      ),
+      message(() =>
+        kageroEnvironment({
+          ...baseKagero(),
+          otlpEndpointCloudwatch: "https://u:pw-tok@h/path-tok?q=query-tok$",
+        }),
+      ),
+      message(() =>
+        kageroEnvironment({ ...baseKagero(), otlpEndpoint: "u:pw-tok@h/path-tok?q=query-tok" }),
+      ),
+      message(() =>
+        kageroEnvironment({ ...baseKagero(), imdsEndpoint: "u:pw-tok@h/path-tok?q=query-tok" }),
+      ),
+      message(() =>
+        kageroEnvironment({
+          ...baseKagero(),
+          collectorReloadUrl: "http://u:pw-tok@127.0.0.1:1/path-tok?q=query-tok\t",
+        }),
+      ),
+    ];
+    for (const msg of messages) {
+      for (const t of ["pw-tok", "path-tok", "query-tok"]) {
+        expect(msg, `${t} leaked`).not.toContain(t);
+      }
+    }
+    expect(messages).toEqual([
+      "Error: otlpEndpointLgtm contains a control character (U+000A)",
+      'Error: otlpEndpointCloudwatch must be printable ASCII without ", \\, $ or backtick',
+      "Error: otlpEndpoint must be an absolute http:// or https:// URL with a host",
+      "Error: imdsEndpoint must be an absolute http:// or https:// URL with a host",
+      "Error: collectorReloadUrl contains a control character (U+0009)",
+    ]);
+  });
+
   it("rejects JSON Pointers the agent refuses at boot", () => {
     for (const bad of ["tenant/id", "/a~2b", "/a~"]) {
       expect(() => kageroEnvironment({ ...baseKagero(), tenantJsonPointer: bad })).toThrow(
