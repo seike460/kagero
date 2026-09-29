@@ -158,6 +158,8 @@ sequenceDiagram
 
 フックのポートが外から届かないことは、[PoC-02](../poc/02-hook-contract.md) で確かめます。
 
+フックのポートは、すべてのインターフェースで待ち受けます。`KAGERO_HOOK_ALLOWED_PEERS` が未設定のとき、kagero が拒むのは loopback からの接続だけです。そのためアプリは、MicroVM 自身の IP に接続してフックを偽造できます。これは残る危険です。PoC-02 で Lambda の送信元のアドレスを確かめ、許可リストに設定して塞ぎます（[脅威モデル](architecture.md#9-脅威モデル)）。
+
 ## 6. 静止と起動（[ADR-005](../decisions.md#adr-005-ビルド時は静止しrun-で起動する)）
 
 原則: ビルド時は静止し、`/run` で起動します。

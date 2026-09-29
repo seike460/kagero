@@ -126,6 +126,12 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Docs**: `kagero.env.example` keeps its comments on their own lines
   and says how to load it. With `docker run --env-file`, a comment after
   a value became part of the value, and the agent refused to start.
+- **Docs**: the READMEs, the examples, `kagero.env.example`, the
+  `hookAllowedPeers` JSDoc, the threat model and PoC-02 now say that with
+  `KAGERO_HOOK_ALLOWED_PEERS` unset, the app can forge hooks such as
+  `/terminate` by connecting to the MicroVM's own IP. The agent's startup
+  warning says so too. The risk stays open until PoC-02 confirms the
+  addresses Lambda sends hooks from.
 
 ## [0.1.0] — 2026-09-28
 

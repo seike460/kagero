@@ -654,9 +654,10 @@ pub async fn serve(agent: std::sync::Arc<Agent>, listener: TcpListener) -> ! {
         warn!(
             "KAGERO_HOOK_ALLOWED_PEERS unset — rejecting loopback peers only. \
                A loopback source can only be the in-VM app, which is untrusted \
-               (it could forge /terminate). Genuine hooks arrive from outside \
-               the MicroVM; set the allowlist once PoC-02 confirms Lambda's \
-               source addresses"
+               (it could forge /terminate), but the app can still reach this \
+               port through the MicroVM's own IP. Genuine hooks arrive from \
+               outside the MicroVM; set the allowlist once PoC-02 confirms \
+               Lambda's source addresses"
         );
     }
     if let Ok(addr) = listener.local_addr() {

@@ -49,7 +49,7 @@ Generated dashboards use the v1 JSON model so that they work on Grafana 13, Graf
 5. **Report usage facts, apply prices at query time.** Costs are always labeled as estimates and reconciled against the AWS Cost and Usage Report.
 6. **One spec, two backends.** A single dashboard spec renders for both backends. Anything a backend cannot show is marked as not supported instead of being silently dropped.
 7. **No secrets in image environment variables.** Secrets are fetched at `/run` with the execution role.
-8. **Assume untrusted code runs next to the agent.**
+8. **Assume untrusted code runs next to the agent.** Remaining risks are listed in the [threat model](docs/design/architecture.en.md#9-threat-model) — for example, until `KAGERO_HOOK_ALLOWED_PEERS` is set, the app can forge hooks through the MicroVM's own IP.
 
 ## Languages
 

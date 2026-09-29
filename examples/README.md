@@ -40,6 +40,15 @@ collector never exports (you'd only see a `kagero.lifecycle.degraded`
 event). For auth-free local testing, swap in a template without
 `otelcol.auth.basic` — see `collector/README.md`.
 
+## A word on the hook port
+
+The agent's hook port listens on all interfaces. With
+`KAGERO_HOOK_ALLOWED_PEERS` unset, it rejects loopback peers only, so
+the app can still forge hooks such as `/run` or `/terminate` by
+connecting to the MicroVM's own IP. This risk stays open until PoC-02
+confirms the addresses Lambda sends hooks from; then set them as the
+allowlist (`hookAllowedPeers` in `KageroMicrovmImage`).
+
 ## Build
 
 From the repo root (the collector template must be in context):

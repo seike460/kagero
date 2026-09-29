@@ -45,6 +45,16 @@ MicroVM イメージです。本番の負荷には使いません。アプリが
 `otelcol.auth.basic` を持たないテンプレートに差し替えてください
 （`collector/README.md` 参照）。
 
+## フックのポートについて
+
+エージェントのフックのポートは、すべてのインターフェースで
+待ち受けます。`KAGERO_HOOK_ALLOWED_PEERS` を設定しないと、拒むのは
+loopback からの接続だけです。そのためアプリは、MicroVM 自身の IP に
+接続して、`/run` や `/terminate` などのフックを偽造できます。
+この危険は、Lambda がフックを送ってくるアドレスを PoC-02 で
+確かめるまで残ります。確かめたら、そのアドレスを許可リストに
+設定してください（`KageroMicrovmImage` では `hookAllowedPeers`）。
+
 ## ビルド
 
 リポジトリのルートで実行します（収集器のテンプレートを context

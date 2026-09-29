@@ -99,7 +99,10 @@ export interface KageroMicrovmConfig {
   region?: string;
   appUid?: number;
   appGid?: number;
-  /** Comma-separated CIDRs or bare IPs allowed on the hook port. */
+  /** Comma-separated CIDRs or bare IPs allowed on the hook port. Unset,
+   *  the agent rejects loopback peers only, so the app can still forge
+   *  hooks (`/run`, `/terminate`) through the MicroVM's own IP — a risk
+   *  that stays open until PoC-02 confirms Lambda's source addresses. */
   hookAllowedPeers?: string;
   /** Secrets Manager ARN the agent fetches at /run — a reference, not
    *  the secret itself (ADR-011 allows ARNs in env). */

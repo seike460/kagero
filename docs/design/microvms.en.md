@@ -160,6 +160,8 @@ sequenceDiagram
 
 That the hook port is unreachable from outside is verified in [PoC-02 (Japanese)](../poc/02-hook-contract.md).
 
+The hook port listens on all interfaces. With `KAGERO_HOOK_ALLOWED_PEERS` unset, kagero rejects only loopback peers, so the app can forge hooks by connecting to the MicroVM's own IP. This is a remaining risk. PoC-02 confirms Lambda's source addresses, and setting them as the allowlist closes it ([threat model](architecture.en.md#9-threat-model)).
+
 ## 6. Static at build, started at `/run` ([ADR-005](../decisions.en.md#adr-005-quiesce-at-build-arm-on-run))
 
 Principle: stay static at build time and start at `/run`.
