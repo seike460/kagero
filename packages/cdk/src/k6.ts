@@ -32,9 +32,11 @@
  * `run.worker.addLayers(...)` puts it at /opt/bin/k6, which Lambda keeps
  * on PATH — and ship the script the same way (a layer's `k6/test.js`
  * is /opt/k6/test.js). Without k6, every shard waits until `startAtMs`
- * and then fails. `scriptPath` must be a file inside the worker: a URL
- * is refused, so the execution input cannot point k6 at a remote
- * script.
+ * and then fails. `scriptPath` must be a file inside the worker — under
+ * the function code (LAMBDA_TASK_ROOT, /var/task; a relative path
+ * resolves there) or a layer (/opt). A URL, `-`, or a path or symlink
+ * that leads elsewhere (/tmp, ../) is refused, so the execution input
+ * cannot point k6 at a remote script or a file written at run time.
  *
  * k6 is AGPL-3.0: kagero only invokes it. A layer that redistributes
  * the binary keeps it unmodified and states the license and where to

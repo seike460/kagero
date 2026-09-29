@@ -1,9 +1,11 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { postRunAnnotation } from "./annotations.js";
 import { baseMetricName, EmfEncoder, k6JsonToEmf } from "./emf.js";
 import { handlerFromEnv, outputFromEnv, type ShardEvent } from "./index.js";
@@ -238,8 +240,28 @@ describe("EmfEncoder", () => {
   });
 });
 
+// A stand-in for the worker's code: LAMBDA_TASK_ROOT points here for the
+// whole file, and the scripts the tests name exist under it. tmpdir() is
+// a symlink on macOS (/var → /private/var), so k6 gets the real path.
+const TASK_ROOT = mkdtempSync(join(tmpdir(), "kagero-k6-task-"));
+const OUTSIDE = mkdtempSync(join(tmpdir(), "kagero-k6-outside-"));
+mkdirSync(join(TASK_ROOT, "k6"));
+writeFileSync(join(TASK_ROOT, "script.js"), "");
+writeFileSync(join(TASK_ROOT, "k6", "test.js"), "");
+writeFileSync(join(OUTSIDE, "evil.js"), "");
+symlinkSync(join(OUTSIDE, "evil.js"), join(TASK_ROOT, "link.js"));
+const REAL_TASK_ROOT = realpathSync(TASK_ROOT);
+beforeAll(() => {
+  vi.stubEnv("LAMBDA_TASK_ROOT", TASK_ROOT);
+});
+afterAll(() => {
+  vi.unstubAllEnvs();
+  rmSync(TASK_ROOT, { recursive: true, force: true });
+  rmSync(OUTSIDE, { recursive: true, force: true });
+});
+
 const BASE_INPUT: RunShardInput = {
-  scriptPath: "/opt/script.js",
+  scriptPath: "script.js",
   runId: "run-1",
   shardIndex: 1,
   shardCount: 3,
@@ -255,7 +277,7 @@ describe("k6Args", () => {
     expect(joined).toContain("--execution-segment-sequence 0,1/3,2/3,1");
     expect(joined).toContain("--tag run_id=run-1");
     expect(joined).toContain("--tag shard_id=1");
-    expect(args.slice(-2)).toEqual(["--", "/opt/script.js"]);
+    expect(args.slice(-2)).toEqual(["--", join(REAL_TASK_ROOT, "script.js")]);
   });
 
   it("accepts only a script inside the worker", () => {
@@ -266,11 +288,27 @@ describe("k6Args", () => {
       "-",
       "",
       undefined,
+      // Files that exist, but outside the function code and the layers.
+      join(OUTSIDE, "evil.js"),
+      "/tmp",
+      "../",
+      relative(TASK_ROOT, join(OUTSIDE, "evil.js")), // ../kagero-k6-outside-*/evil.js
+      pathToFileURL(join(OUTSIDE, "evil.js")).href,
+      "link.js", // a symlink inside that leads outside
+      "missing.js",
+      "k6", // a directory
+      ".",
     ]) {
       expect(() => k6Args({ ...BASE_INPUT, scriptPath: bad as string })).toThrow(/scriptPath/);
     }
-    for (const ok of ["/opt/k6/test.js", "k6/test.js", "file:///opt/k6/test.js"]) {
-      expect(k6Args({ ...BASE_INPUT, scriptPath: ok }).at(-1)).toBe(ok);
+    const inside = join(REAL_TASK_ROOT, "k6", "test.js");
+    for (const ok of [
+      "k6/test.js",
+      "./k6/../k6/test.js",
+      join(TASK_ROOT, "k6", "test.js"),
+      pathToFileURL(join(TASK_ROOT, "k6", "test.js")).href,
+    ]) {
+      expect(k6Args({ ...BASE_INPUT, scriptPath: ok }).at(-1)).toBe(inside);
     }
   });
 
@@ -285,7 +323,7 @@ describe("k6Args", () => {
       "https://evil.example/x.js",
       "--user-agent",
       "--",
-      "/opt/script.js",
+      join(REAL_TASK_ROOT, "script.js"),
     ]);
   });
 
@@ -594,7 +632,7 @@ describe("postRunAnnotation", () => {
 describe("handlerFromEnv", () => {
   // `true` stands in for k6, so the real spawn and fetch paths run.
   const EVENT: ShardEvent = {
-    scriptPath: "/opt/k6/test.js",
+    scriptPath: "k6/test.js",
     runId: "run-9",
     shardIndex: 0,
     shardCount: 2,
