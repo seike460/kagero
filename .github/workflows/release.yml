@@ -1,9 +1,11 @@
 name: release
 
 # Tag-triggered publish of the agent image to GHCR
-# (docs/design/architecture.md §11: ghcr.io/seike460/kagero). Semver tags
-# v0.1.0 produce image tags 0.1.0 and 0.1 — the short tag is what the
-# examples' `COPY --from=` references.
+# (docs/design/architecture.md §11: ghcr.io/seike460/kagero). A tag
+# v0.1.0 produces the image tags 0.1.0, 0.1 and latest — the short tag
+# is what the examples' `COPY --from=` references. latest comes from
+# metadata-action's default flavor (latest=auto). A pre-release tag such
+# as v0.2.0-rc.1 produces only 0.2.0-rc.1.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]

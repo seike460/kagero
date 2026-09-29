@@ -64,7 +64,7 @@
 2. 版を上げる PR を作ります。
    - `Cargo.toml` の `version` と、9 個の `package.json` の `version` を `X.Y.Z` にします。
    - `cargo check --workspace` で、`Cargo.lock` の `kagero-agent` の版を更新します。CI とイメージのビルドは `--locked` なので、更新を忘れると失敗します。
-   - `CHANGELOG.md` の `## [Unreleased]` を `## [X.Y.Z] — YYYY-MM-DD` に変え、その上に空の `## [Unreleased]` を足します。
+   - `CHANGELOG.md` の `## [Unreleased]` を `## [X.Y.Z] — YYYY-MM-DD` に変え、その上に空の `## [Unreleased]` を足します。末尾のリンク定義も直します。`releases/tag/vX.Y.Z` を指す `[X.Y.Z]` の行を足し、`[Unreleased]` の行は `compare/vX.Y.Z...HEAD` に変えます。
    - README.md と README.ja.md の状態の記述を、公開する版に合わせます。
 3. その PR を main に入れ、CI が通ったことを確かめます。
 4. main のその commit に、注釈付きの tag を打って push します。

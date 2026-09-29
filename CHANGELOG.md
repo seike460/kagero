@@ -181,8 +181,18 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 
 MicroVMs preview release. Implementation preceded the PoC gate — see
 ADR-012 (docs/decisions.md). AWS-backed verification (PoC-01…05) is
-still pending; everything below is verified by unit tests and the
-simulator E2E, not on real AWS yet.
+still pending, so nothing below is verified on real AWS yet. Unit tests
+and the simulator E2E cover the items below, except three agent paths
+that had no automated test in this release: the Secrets Manager fetch,
+collector supervision (CI ran no collector) and the fail-open path of
+ADR-004.
+
+The release also carries modules that the roadmap places in later
+stages (v0.2–v0.5): pricing, alert rules, the durable stitcher, the k6
+runner and the CDK constructs. They ship early as previews (ADR-012).
+The TypeScript packages are private and not published to npm; use them
+from a checkout of this repository. The agent image is the only
+published artifact.
 
 ### Added
 
@@ -194,9 +204,11 @@ simulator E2E, not on real AWS yet.
   fallback that never blocks the workload (ADR-004).
 - **Collector configs** (`collector/`): OTel Collector templates for
   LGTM and CloudWatch, an Alloy template for LGTM, and Rotel env
-  templates — all rendered on `/run` with fail-closed placeholders and
-  three-level (resource / datapoint / scope) forbidden-attribute
-  stripping (ADR-008).
+  templates — all rendered on `/run` with fail-closed placeholders. The
+  OTel Collector and Alloy templates strip forbidden attributes at three
+  levels (resource / datapoint / scope, ADR-008). The Rotel templates
+  strip nothing: they add no ids themselves, but ids that the app sets
+  on its own telemetry reach the metric labels.
 - **Semantic conventions** (`semconv/` + `packages/semconv`): the YAML
   registry is the source of truth; Rust and TypeScript constants plus
   the attribute reference doc are generated from it.
@@ -207,8 +219,11 @@ simulator E2E, not on real AWS yet.
 - **Pricing** (`packages/pricing`): versioned unit-price tables and
   cost formulas for the four products (estimates only — ADR-009).
 - **Dashboards** (`packages/dashboards`): one spec compiled to Grafana
-  dashboard JSON and alert rule files for both backends, via the
-  Grafana Foundation SDK.
+  dashboard JSON for both backends via the Grafana Foundation SDK, plus
+  alert rules. The alert rules work on LGTM only, as a Prometheus rule
+  file. For CloudWatch the file is a manifest that marks every rule as
+  not supported, because CloudWatch alarms cannot evaluate PromQL; it
+  names CDK (v0.5) as the planned way to provision them.
 - **Durable stitcher** (`packages/durable-stitcher`): EventBridge
   status-change notifications → `GetDurableExecutionHistory` → a
   deterministic trace + metrics, fanned out to one or both backends.
@@ -220,12 +235,29 @@ simulator E2E, not on real AWS yet.
   hook-aware sample apps and the full env contract.
 - **CI** (`.github/workflows/`): Rust gates, TypeScript gates,
   generated-artifact drift check, example syntax check.
-- **Release** (`.github/workflows/release.yml`): tag `v*` publishes
-  `ghcr.io/seike460/kagero` (arm64) with `0.x.y` + `0.x` tags.
+- **Release** (`.github/workflows/release.yml`): a `vX.Y.Z` tag
+  publishes `ghcr.io/seike460/kagero` (linux/arm64) as `X.Y.Z`, `X.Y`
+  and `latest` — for this release `0.1.0`, `0.1` and `latest`.
 
-### Not in this release (roadmap "入れないもの" / pending verification)
+### Known limitations
+
+- Metrics from several MicroVMs of the same image collide. ADR-008 keeps
+  ids off metric labels, so all MicroVMs of an image write to the same
+  series, and each agent sends its own cumulative sums. With two or more
+  running at once, `rate()` and `increase()` read the interleaved values
+  as counter resets and overshoot the true value. This affects the
+  dashboard's metric panels (including the cost estimate) and the alerts
+  that use `rate()` or `increase()`. PoC-05 checks it on real backends
+  and decides the fix (delta temporality or a single writer).
+
+### Not in this release / pending verification
 
 - Real AWS verification: MicroVM timeouts, credential reachability,
   billing figures, snapshot behavior (PoC-01…05).
 - Grafana 13 / Amazon Managed Grafana 12.4 dashboard load check.
-- Function-level dashboards/alerts, eBPF, fleet view, cost preview.
+- Function-level dashboards/alerts, eBPF, fleet view, the k6 runner's
+  MicroVM launcher for long runs, and reconciling the cost estimate
+  against the AWS Cost and Usage Report (PoC-09).
+
+[Unreleased]: https://github.com/seike460/kagero/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/seike460/kagero/releases/tag/v0.1.0
