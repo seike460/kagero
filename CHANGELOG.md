@@ -221,6 +221,10 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   the v0.1 acceptance criteria were met, as an exception to the
   versioning rule. It meets criterion 6 and, in the simulator, part of
   criterion 5, and it carries modules from later stages.
+- **Docs**: PoC-04 runs the published agent image instead of a stand-in
+  relay script. PoC-05 now checks the SigV4 service names of the
+  CloudWatch OTLP endpoints (`monitoring`, `logs`, `xray`) and the
+  log-group headers.
 
 ## [0.1.0] — 2026-09-28
 

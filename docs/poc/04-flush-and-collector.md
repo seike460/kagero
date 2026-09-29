@@ -12,7 +12,8 @@
 
 - [共通の安全策](README.md#共通の安全策) を満たしています。
 - LGTM 側は Grafana Cloud の無料枠、CloudWatch 側は同じアカウントの OTLP エンドポイントを使います。
-- 検証用の小さな中継スクリプト（本番の kagero の代わり）で、フックの順序を再現します。
+- 公開している kagero のイメージ（`ghcr.io/seike460/kagero`）から、examples と同じ `COPY --from` でエージェントを取り込み、ENTRYPOINT にします。実際のエージェントがフックを中継し、送り切ります（[ADR-012](../decisions.md)）。
+- 手順 2 の (a) と (b) は、`KAGERO_COLLECTOR_CONFIG_TEMPLATE` で収集器の設定を差し替えて作ります。(c) の SIGTERM は、kagero が `/terminate` で送ります。
 
 ## 手順
 
