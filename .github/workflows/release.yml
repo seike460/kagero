@@ -10,14 +10,43 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  # A tag publishes only a commit that passes the whole CI, whether or
+  # not CI finished for it on main.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  # The image tags come from the git tag alone; refuse a tag that does
+  # not match the version in the source (docs/roadmap.md: one version
+  # for the whole monorepo).
+  version:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Check the tag matches every version in the source
+        run: |
+          want=${GITHUB_REF_NAME#v}
+          cargo=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          echo "tag $want, Cargo.toml $cargo"
+          test "$cargo" = "$want"
+          for f in package.json packages/*/package.json; do
+            got=$(jq -r .version "$f")
+            echo "$f $got"
+            test "$got" = "$want"
+          done
+
   agent-image:
+    needs: [ci, version]
+    permissions:
+      contents: read
+      packages: write
     # ARM runner: MicroVM images are aarch64; the Alpine/musl build is
     # native here (no QEMU). Add linux/amd64 later if an amd64 MicroVM
     # base ever ships — the examples' base image dictates the arch.
