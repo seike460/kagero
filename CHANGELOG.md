@@ -123,6 +123,9 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   `KAGERO_OTLP_ENDPOINT_CLOUDWATCH` for the example images, which ship
   the LGTM-only Alloy template. It now says what switching to CloudWatch
   takes.
+- **Docs**: `kagero.env.example` keeps its comments on their own lines
+  and says how to load it. With `docker run --env-file`, a comment after
+  a value became part of the value, and the agent refused to start.
 
 ## [0.1.0] — 2026-09-28
 
