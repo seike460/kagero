@@ -75,6 +75,10 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   `REDACTED@`, and a path, query or fragment becomes `/REDACTED`, since
   a token can sit in any of them. A value without a scheme is shown as
   `REDACTED`.
+- **Agent**: a variable whose value is not valid Unicode still fails
+  startup, but the error now names only the variable. Before, it printed
+  the raw value, so an endpoint's `user:password@` could reach the log
+  before the `kagero starting` redaction applied.
 - **Agent**: with `KAGERO_COLLECTOR_START=build` and `KAGERO_SECRET_ARN`
   both set, the collector now waits for `/run` as documented. Before, the
   build-time start failed and logged a `kagero.lifecycle.degraded` event

@@ -163,10 +163,17 @@ pub struct Config {
 /// use the documented default. A non-Unicode value IS malformed — only
 /// NotPresent means "use the default".
 fn env_string(key: &str) -> Result<Option<String>> {
-    match env::var(key) {
+    var_value(key, env::var(key))
+}
+
+/// The error names the variable but never shows the value: it may be an
+/// endpoint with credentials in it, and startup fails before the log
+/// redaction (`Config::redacted`) ever runs.
+fn var_value(key: &str, v: Result<String, env::VarError>) -> Result<Option<String>> {
+    match v {
         Ok(v) => Ok(Some(v)),
         Err(env::VarError::NotPresent) => Ok(None),
-        Err(env::VarError::NotUnicode(v)) => anyhow::bail!("{key} is not valid Unicode: {v:?}"),
+        Err(env::VarError::NotUnicode(_)) => anyhow::bail!("{key} is not valid Unicode"),
     }
 }
 
@@ -1000,6 +1007,40 @@ mod tests {
         ] {
             let err = format!("{:#}", from_vars(USER, &[(key, value)]).unwrap_err());
             assert!(err.contains(key), "{err}");
+            assert!(!err.contains("s3cret"), "{err}");
+        }
+    }
+
+    #[test]
+    fn non_unicode_errors_name_the_key_but_not_the_value() {
+        use std::os::unix::ffi::OsStringExt;
+        // Every URL variable `redacted()` masks: userinfo plus one byte
+        // that is not UTF-8 must not reach the startup error.
+        for key in [
+            "KAGERO_OTLP_ENDPOINT_LGTM",
+            "KAGERO_OTLP_ENDPOINT",
+            "KAGERO_OTLP_ENDPOINT_CLOUDWATCH",
+            "KAGERO_ENDPOINT_CW_METRICS",
+            "KAGERO_ENDPOINT_CW_LOGS",
+            "KAGERO_ENDPOINT_CW_TRACES",
+            "KAGERO_COLLECTOR_RELOAD_URL",
+            "KAGERO_SECRETS_ENDPOINT",
+            "KAGERO_IMDS_ENDPOINT",
+        ] {
+            let err = Config::from_lookup(vec![], USER, &|k| {
+                let raw = if k == key {
+                    Err(env::VarError::NotUnicode(std::ffi::OsString::from_vec(
+                        b"https://user:s3cret@host\xff/v1".to_vec(),
+                    )))
+                } else {
+                    Err(env::VarError::NotPresent)
+                };
+                var_value(k, raw)
+            })
+            .unwrap_err();
+            let err = format!("{err:#}");
+            assert!(err.contains(key), "{err}");
+            assert!(err.contains("not valid Unicode"), "{err}");
             assert!(!err.contains("s3cret"), "{err}");
         }
     }
