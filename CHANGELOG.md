@@ -217,6 +217,10 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   `resume` run every time. It said that every hook ran only once. Its
   distribution section is no longer marked as planned and names
   `KageroMicrovmImage`.
+- **Docs**: the roadmap notes that v0.1.0 shipped as a preview before
+  the v0.1 acceptance criteria were met, as an exception to the
+  versioning rule. It meets criterion 6 and, in the simulator, part of
+  criterion 5, and it carries modules from later stages.
 
 ## [0.1.0] — 2026-09-28
 
