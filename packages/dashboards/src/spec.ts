@@ -68,7 +68,7 @@ export const microvmOverview: DashboardSpec = {
   uid: "kagero-microvm-overview",
   title: "kagero — MicroVM Overview",
   description:
-    "Lambda MicroVM fleet health: lifecycle, burst usage, suspend duration, cost estimate and logs. All cost figures are ESTIMATES (ADR-009).",
+    "Lambda MicroVM fleet health: lifecycle, burst usage, suspend duration, cost estimate and logs. All cost figures are ESTIMATES (ADR-009). Known limitation: the metric panels overshoot while two or more MicroVMs of one image run at once — ids stay off metric labels (ADR-008), so their counters share one series (PoC-05).",
   tags: ["kagero", "lambda", "microvm"],
   refresh: "1m",
   constants: [
@@ -165,7 +165,7 @@ export const microvmOverview: DashboardSpec = {
           kind: "timeseries",
           title: "Estimated compute cost (USD/hour)",
           description:
-            "ESTIMATE — baseline + burst at us-east-1 ARM list prices; excludes snapshot IO/storage, data transfer, free tier. Other regions are UNVERIFIED (PoC-09). Reconcile against CUR.",
+            "ESTIMATE — baseline + burst at us-east-1 ARM list prices; excludes snapshot IO/storage, data transfer, free tier. Other regions are UNVERIFIED (PoC-09). Reconcile against CUR. Overshoots while two or more MicroVMs of one image run at once — their counters share one series (PoC-05).",
           span: 16,
           height: 8,
           unit: "currencyUSD",

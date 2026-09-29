@@ -121,6 +121,10 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Dashboards**: the dashboard description no longer mentions traces
   or suspend/resume latency. The agent emits no spans, and the suspend
   panel shows how long MicroVMs stayed suspended.
+- **Dashboards**: the dashboard description and the cost panel now say
+  that the metric panels overshoot while two or more MicroVMs of one
+  image run at once. Their counters collide in one series (see Known
+  limitations under 0.1.0).
 - **Collector**: the CloudWatch templates (OTel Collector and Rotel) now
   send logs to the log stream `otlp` in the log group
   `/kagero/<image-name>`. The CloudWatch Logs OTLP endpoint writes only
