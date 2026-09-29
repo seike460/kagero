@@ -85,6 +85,9 @@ pnpm test             # unit tests + simulator E2E
 # Optional: run the E2E through a REAL otelcol-contrib binary to verify
 # collector-side attribute stripping end to end:
 KAGERO_SIM_COLLECTOR_BIN=/path/to/otelcol-contrib pnpm --filter @kagero/sim sim:e2e
+# The same binary also runs the shipped collector/lgtm and
+# collector/cloudwatch templates through the vitest suite:
+KAGERO_SIM_COLLECTOR_BIN=/path/to/otelcol-contrib pnpm --filter @kagero/sim test
 pnpm lint && pnpm typecheck
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings
 pnpm generate         # regenerates semconv constants + dashboards

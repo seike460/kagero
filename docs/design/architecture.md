@@ -196,7 +196,7 @@ kagero/
 ## 10. テスト
 
 - 単体テスト: Rust は `cargo test`、TypeScript は vitest で書きます。
-- simulator での E2E: TypeScript の simulator（`packages/sim`）が、エージェントの実際のバイナリをプロセスとして起動し、本物と同じ順序でフックを呼びます。送り先は、simulator の中に立てる模擬の OTLP 受け口です。`KAGERO_SIM_COLLECTOR_BIN` で otelcol-contrib を指定したときだけ、実際の収集器を通します。CI では両方を流します。
+- simulator での E2E: TypeScript の simulator（`packages/sim`）が、エージェントの実際のバイナリをプロセスとして起動し、本物と同じ順序でフックを呼びます。送り先は、simulator の中に立てる模擬の OTLP 受け口です。`KAGERO_SIM_COLLECTOR_BIN` で otelcol-contrib を指定したときだけ、実際の収集器を通します。このときは、配布する `collector/lgtm` と `collector/cloudwatch` のテンプレートも、エージェントが描画したとおりに実際の収集器へ読み込ませます。そして、アプリが resource・scope・datapoint に付けた識別属性が、受け口に届く前に消えていることを確かめます。Alloy と Rotel のテンプレートは、CI にどちらのバイナリもないため動かしていません。CI では両方を流します。
 - simulator の限界: 停止と再開は、フックを呼ぶだけです。プロセスは止めず、メモリのスナップショットも再現しません。実際のバックエンド（Loki・Tempo・Mimir、CloudWatch）にも送りません。スナップショット固有の問題とバックエンドでの見え方は、PoC と契約テストで確かめます。`docker pause` と `docker unpause` での近似と、`grafana/otel-lgtm` のコンテナに送って Loki・Tempo・Prometheus の HTTP API で確かめる E2E は、まだありません（予定）。
 - 契約テスト: PoC の手順を、月に 1 回 AWS 上で流し直します。手動で起動し、予算の上限を設けます。実機の PoC を終えてから始めます。
 - ダッシュボードのテスト: 再生成の差分と、PromQL の簡単な構文チェックを CI で行います（[7 章](#7-ダッシュボードとアラートの仕様)）。

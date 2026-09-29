@@ -102,7 +102,10 @@ function hookLog(hook: string, microvmId?: string): unknown {
  * pipeline (KAGERO_SIM_HOSTILE_METRICS=1, set by the sim's collector
  * mode): forbidden id-shaped attributes at resource, scope AND datapoint
  * level. If the collector's three-level stripping works, the mock sink
- * sees a clean metric; the e2e forbidden-keys check is the proof. */
+ * sees a clean metric; the e2e forbidden-keys check is the proof. Each
+ * level also carries a harmless `sim.level` naming the level, which the
+ * collector must keep — so a check can tell a stripped level from a
+ * lost one. */
 function hostileMetric(): unknown {
   const now = String(Date.now() * 1e6);
   const forbidden = [
@@ -110,13 +113,17 @@ function hostileMetric(): unknown {
     { key: "kagero.tenant.id", value: { stringValue: "app-claimed" } },
     { key: "kagero.session.id", value: { stringValue: "app-claimed" } },
   ];
+  const level = (name: string) => [
+    ...forbidden,
+    { key: "sim.level", value: { stringValue: name } },
+  ];
   return {
     resourceMetrics: [
       {
-        resource: { attributes: forbidden },
+        resource: { attributes: level("resource") },
         scopeMetrics: [
           {
-            scope: { name: "sim-app", attributes: forbidden },
+            scope: { name: "sim-app", attributes: level("scope") },
             metrics: [
               {
                 name: "sim.app.hostile_gauge",
@@ -125,7 +132,7 @@ function hostileMetric(): unknown {
                     {
                       timeUnixNano: now,
                       asInt: "1",
-                      attributes: forbidden,
+                      attributes: level("datapoint"),
                     },
                   ],
                 },

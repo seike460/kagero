@@ -83,7 +83,10 @@ jobs:
       # The same simulator E2E through a real collector: the agent renders
       # the fixture and supervises the collector, and the collector strips
       # the forbidden attributes the test app sends. The run above only
-      # reaches the mock sink.
+      # reaches the mock sink. This run also loads the shipped
+      # collector/lgtm and collector/cloudwatch templates, rendered by the
+      # agent, and checks the stripping at the receiver (templates.test.ts,
+      # skipped when KAGERO_SIM_COLLECTOR_BIN is unset).
       - name: Simulator E2E through otelcol-contrib
         run: |
           version=0.141.0

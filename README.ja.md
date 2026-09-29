@@ -85,6 +85,9 @@ pnpm test             # 単体テスト + simulator の E2E
 # 任意: 実物の otelcol-contrib を通して E2E を実行し、
 # collector 側の属性の削除を端から端まで確かめる
 KAGERO_SIM_COLLECTOR_BIN=/path/to/otelcol-contrib pnpm --filter @kagero/sim sim:e2e
+# 同じバイナリで、配布する collector/lgtm と collector/cloudwatch の
+# テンプレートも vitest で動かす
+KAGERO_SIM_COLLECTOR_BIN=/path/to/otelcol-contrib pnpm --filter @kagero/sim test
 pnpm lint && pnpm typecheck
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings
 pnpm generate         # semconv の定数とダッシュボードを再生成
