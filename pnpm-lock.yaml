@@ -139,6 +139,9 @@ importers:
 
   packages/semconv:
     devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.19.0
       tsx:
         specifier: ^4.20.0
         version: 4.23.15
