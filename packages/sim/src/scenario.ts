@@ -191,7 +191,7 @@ export async function startSim(opts: SimOptions): Promise<SimHandle> {
  * The port is only free at pick time: another process can still bind it
  * before the agent or app does (a narrow window, not retried). Retries
  * when the OS hands back a port already claimed in `taken`. */
-async function pickPort(taken?: Set<number>): Promise<number> {
+export async function pickPort(taken?: Set<number>): Promise<number> {
   for (;;) {
     const srv = createServer();
     await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));

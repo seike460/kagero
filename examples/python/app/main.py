@@ -9,7 +9,8 @@ Same three contracts as the Node example:
  1. OTLP out → 127.0.0.1:$KAGERO_OTLP_PORT (never the backend directly).
  2. Hook server on $KAGERO_APP_HOOK_PORT —
     POST /aws/lambda-microvms/runtime/v1/<hook>.
- 3. Runtime ids arrive in runHookPayload; the app never invents them.
+ 3. Runtime ids arrive in the /run body alongside runHookPayload; the app
+    never invents them.
 """
 
 import json
@@ -97,5 +98,4 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(json.dumps({"msg": "example app listening", "hookPort": HOOK_PORT}), flush=True)
-    emit_log("app started", "boot")
     ThreadingHTTPServer(("127.0.0.1", HOOK_PORT), Handler).serve_forever()

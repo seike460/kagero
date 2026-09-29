@@ -110,6 +110,9 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   backend has to convert them to cumulative. A Prometheus without the
   `otlp-deltatocumulative` feature flag or a default Mimir does not
   ingest them.
+- **Examples**: the Python example app no longer sends an OTLP log when
+  it starts. The app starts during the image build, before the
+  collector runs, and nothing may be sent at build time.
 
 ## [0.1.0] — 2026-09-28
 
