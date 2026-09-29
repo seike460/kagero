@@ -237,17 +237,24 @@ fn endpoint_safe(v: &str) -> bool {
         .all(|c| c.is_ascii() && !c.is_ascii_control() && !matches!(c, '"' | '\\' | '$' | '`'))
 }
 
-/// Mask the userinfo of a URL (`user:pass@`) — the startup log prints
-/// the whole Config, and endpoint_safe lets userinfo through.
-fn redact_userinfo(url: &str) -> String {
+/// Mask the parts of a URL that can carry credentials — userinfo
+/// (`user:pass@`) and the query or fragment (`?token=…`). The startup log
+/// prints the whole Config, and endpoint_safe lets both through.
+fn redact_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         return url.to_string();
     };
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    match rest[..authority_end].rfind('@') {
-        Some(at) => format!("{scheme}://REDACTED@{}", &rest[at + 1..]),
-        None => url.to_string(),
-    }
+    let (authority, tail) = rest.split_at(authority_end);
+    let host = match authority.rfind('@') {
+        Some(at) => format!("REDACTED@{}", &authority[at + 1..]),
+        None => authority.to_string(),
+    };
+    let path = match tail.find(['?', '#']) {
+        Some(q) => format!("{}?REDACTED", &tail[..q]),
+        None => tail.to_string(),
+    };
+    format!("{scheme}://{host}{path}")
 }
 
 fn env_endpoint(get: Lookup, key: &str) -> Result<Option<String>> {
@@ -491,7 +498,7 @@ impl Config {
         self.collector_start == CollectorStart::Build && self.secret_arn.is_none()
     }
 
-    /// A copy for the startup log, with URL userinfo masked.
+    /// A copy for the startup log, with URL credentials masked.
     pub fn redacted(&self) -> Config {
         let mut c = self.clone();
         for url in [
@@ -506,9 +513,9 @@ impl Config {
         .into_iter()
         .flatten()
         {
-            *url = redact_userinfo(url);
+            *url = redact_url(url);
         }
-        c.imds_endpoint = redact_userinfo(&c.imds_endpoint);
+        c.imds_endpoint = redact_url(&c.imds_endpoint);
         c
     }
 
@@ -831,14 +838,22 @@ mod tests {
                 "{secret:?} reached the log: {logged}"
             );
         }
-        assert!(logged.contains("https://REDACTED@lgtm.example.com:4318/v1?x=1"));
+        assert!(logged.contains("https://REDACTED@lgtm.example.com:4318/v1?REDACTED"));
         assert!(logged.contains("http://REDACTED@169.254.169.254"));
         // Only the authority is userinfo — an '@' in the path stays.
         assert_eq!(
-            redact_userinfo("https://host:4318/v1/a@b?c=@"),
-            "https://host:4318/v1/a@b?c=@"
+            redact_url("https://host:4318/v1/a@b?c=@"),
+            "https://host:4318/v1/a@b?REDACTED"
         );
-        assert_eq!(redact_userinfo("not a url"), "not a url");
+        assert_eq!(
+            redact_url("https://collector/v1?token=s3cret#frag"),
+            "https://collector/v1?REDACTED"
+        );
+        assert_eq!(
+            redact_url("https://host:4318/v1/metrics"),
+            "https://host:4318/v1/metrics"
+        );
+        assert_eq!(redact_url("not a url"), "not a url");
         // The running config keeps the real endpoint.
         assert_eq!(
             cfg.otlp_endpoint_lgtm.as_deref(),
