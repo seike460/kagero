@@ -25,13 +25,17 @@ jobs:
 
   # The image tags come from the git tag alone; refuse a tag that does
   # not match the version in the source (docs/roadmap.md: one version
-  # for the whole monorepo).
+  # for the whole monorepo), or that points outside main — releases ship
+  # only what was merged through a PR (AGENTS.md).
   version:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Check the tagged commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - name: Check the tag matches every version in the source
         run: |
           want=${GITHUB_REF_NAME#v}
