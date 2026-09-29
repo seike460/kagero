@@ -40,6 +40,17 @@ jobs:
           echo "$out"
           grep -q '^test result: ok. 1 passed' <<<"$out"
 
+  msrv:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check on the rust-version declared in Cargo.toml
+        run: |
+          msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          test -n "$msrv"
+          rustup toolchain install "$msrv" --profile minimal
+          cargo "+$msrv" check --workspace --locked
+
   typescript:
     runs-on: ubuntu-latest
     steps:
