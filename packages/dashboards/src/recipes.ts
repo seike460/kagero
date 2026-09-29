@@ -38,7 +38,8 @@ export const RECIPES: Record<string, RecipeSet> = {
     cwLog:
       "fields @timestamp, @message\n| filter @message like /kagero.usage.summary/\n| sort @timestamp desc\n| limit 200",
   },
-  /** Degraded-path events — fail-soft relay/collector/flush failures
+  /** Degraded-path events — fail-soft kagero-side failures (e.g. secret
+   *  fetch, collector, OTLP export; app relay failures are not degraded)
    *  (body "kagero.lifecycle.degraded", reason on attributes). When the
    *  collector itself is down, these never arrive here — use
    *  platform-degraded on CloudWatch for the stdout fallback. */

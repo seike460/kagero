@@ -144,7 +144,7 @@ export const microvmOverview: DashboardSpec = {
           kind: "timeseries",
           title: "Degraded events (fail-soft)",
           description:
-            "Lifecycle steps the agent could not complete cleanly — relay timeouts, collector errors, OTLP flush failures. Should stay 0. Counts only events that reached the OTLP path — when the collector itself is down the sole record is the stdout fallback (see the platform-logs panel in the Logs row; CloudWatch only).",
+            "Steps kagero itself could not complete cleanly, such as a secret fetch, a collector start/reconnect/stop or an OTLP export. App relay failures and timeouts are not degraded events — kagero.microvm.hook_results counts them (status error/timeout). Should stay 0. Counts only events that reached the OTLP path — when the collector itself is down the sole record is the stdout fallback (see the platform-logs panel in the Logs row; CloudWatch only).",
           span: 12,
           height: 6,
           unit: "ops",

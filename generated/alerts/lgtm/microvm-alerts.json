@@ -11,7 +11,7 @@
             "severity": "warning"
           },
           "annotations": {
-            "summary": "kagero agent took the degraded path (relay/flush/collector failure)"
+            "summary": "kagero agent took the degraded path (a kagero-side step failed, e.g. secret fetch, collector or OTLP export; app relay failures are not counted)"
           }
         },
         {

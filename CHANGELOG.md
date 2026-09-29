@@ -103,6 +103,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   variable now defaults to `/aws/lambda-microvms/<image-name>`, the log
   group where MicroVMs write stdout by default. It showed the Lambda
   function form `/aws/lambda/<function-name>`.
+- **Dashboards**: the degraded-events panel and the
+  `KageroDegradedLifecycle` alert no longer say that they count app
+  relay failures. Only kagero's own steps (a secret fetch, the
+  collector, an OTLP export, and so on) raise a degraded event. App relay
+  failures and timeouts are counted by `kagero.microvm.hook_results`.
 - **Docs**: the k6 runner (`outputFromEnv`) and `KageroK6Run` now list
   the worker env and its values. There, `KAGERO_OTLP_ENDPOINT` is
   `host:port` with no scheme and `KAGERO_OTLP_HEADERS` is

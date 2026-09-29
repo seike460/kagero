@@ -8,7 +8,7 @@
       "expr": "sum(increase(kagero_microvm_lifecycle_transitions_total{kagero_lifecycle_event=\"degraded\"}[5m])) > 0",
       "forSeconds": 300,
       "severity": "warning",
-      "summary": "kagero agent took the degraded path (relay/flush/collector failure)",
+      "summary": "kagero agent took the degraded path (a kagero-side step failed, e.g. secret fetch, collector or OTLP export; app relay failures are not counted)",
       "supported": false,
       "unsupportedReason": "CloudWatch alarms do not evaluate PromQL — provision via CDK (v0.5)."
     },

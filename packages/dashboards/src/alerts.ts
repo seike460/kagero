@@ -25,7 +25,8 @@ export const alertRules: AlertRuleSpec[] = [
     name: "KageroDegradedLifecycle",
     severity: "warning",
     forSeconds: 300,
-    summary: "kagero agent took the degraded path (relay/flush/collector failure)",
+    summary:
+      "kagero agent took the degraded path (a kagero-side step failed, e.g. secret fetch, collector or OTLP export; app relay failures are not counted)",
     expr: (m) =>
       `sum(increase(${m("kagero.microvm.lifecycle_transitions")}{kagero_lifecycle_event="degraded"}[${RI}])) > 0`,
   },
