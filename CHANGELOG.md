@@ -7,6 +7,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Security policy**: `SECURITY.md` says how to report a vulnerability
+  privately.
+
 ### Changed
 
 - **Agent**: startup now rejects more malformed configuration instead of
