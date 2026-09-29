@@ -330,14 +330,20 @@ fn env_json_pointer(get: Lookup, key: &str) -> Result<Option<String>> {
     Ok(v)
 }
 
+/// A listener port in 1–65535. Port 0 would bind an OS-chosen ephemeral
+/// port while Hooks.Port, the app and the collector config keep using 0.
 fn env_u16(get: Lookup, key: &str, default: u16) -> Result<u16> {
-    get(key)?
+    let port = get(key)?
         .map(|v| {
             v.parse::<u16>()
-                .with_context(|| format!("{key} must be a port number"))
+                .with_context(|| format!("{key} must be a port number (1–65535)"))
         })
-        .transpose()
-        .map(|o| o.unwrap_or(default))
+        .transpose()?
+        .unwrap_or(default);
+    if port == 0 {
+        anyhow::bail!("{key} must be a port number (1–65535): got 0");
+    }
+    Ok(port)
 }
 
 impl Config {
@@ -789,6 +795,28 @@ mod tests {
                 from_vars(USER, &[(key, value)]).is_err(),
                 "{key}={value:?} must fail startup"
             );
+        }
+    }
+
+    #[test]
+    fn ports_must_be_in_1_to_65535() {
+        for key in [
+            "KAGERO_HOOK_PORT",
+            "KAGERO_APP_HOOK_PORT",
+            "KAGERO_OTLP_PORT",
+            "KAGERO_ADMIN_PORT",
+        ] {
+            // Port 0 binds an OS-chosen port nobody else is told about.
+            for value in ["0", "00"] {
+                let err = format!("{:#}", from_vars(USER, &[(key, value)]).unwrap_err());
+                assert!(err.contains(key), "{key}={value:?}: {err}");
+            }
+            for value in ["1", "65535"] {
+                assert!(
+                    from_vars(USER, &[(key, value)]).is_ok(),
+                    "{key}={value:?} must pass startup"
+                );
+            }
         }
     }
 

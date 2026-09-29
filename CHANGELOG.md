@@ -20,8 +20,10 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   land in shell-sourced env files. They and `KAGERO_IMDS_ENDPOINT` must
   be absolute `http://` or `https://` URLs with a host; the error names
   the variable but does not print its value. `KAGERO_HOOK_PORT`,
-  `KAGERO_APP_HOOK_PORT`, `KAGERO_OTLP_PORT`, `KAGERO_ADMIN_PORT` and the
-  collector's fixed OTLP/gRPC port 4317 must all differ.
+  `KAGERO_APP_HOOK_PORT`, `KAGERO_OTLP_PORT` and `KAGERO_ADMIN_PORT`
+  must be in 1–65535, and they and the collector's fixed OTLP/gRPC port
+  4317 must all differ. Port 0 is refused: the OS would bind a different
+  port from the one Hooks, the app and the collector are given.
   `KAGERO_TENANT_JSON_POINTER` / `KAGERO_SESSION_JSON_POINTER` must be
   RFC 6901 pointers, and `KAGERO_MICROVM_BASELINE_GIB` /
   `KAGERO_MICROVM_BASELINE_VCPU` must be positive finite numbers.
