@@ -1,5 +1,7 @@
-import { existsSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { agentBin, runE2E, testAppPath } from "./e2e.js";
 import { callHook, type HookName, runBody } from "./hooks.js";
 import { startSim } from "./scenario.js";
@@ -59,6 +61,27 @@ describe.skipIf(!existsSync(agentBin) && !process.env.CI)("agent E2E", () => {
       expect((await call("terminate")).status).toBe(200);
     } finally {
       await sim.teardown();
+    }
+  });
+
+  it("leaves no temp dir behind after teardown", { timeout: 60_000 }, async () => {
+    // Every temp dir startSim creates lands under this TMPDIR. With
+    // KAGERO_SIM_COLLECTOR_BIN set (CI), that includes the collector's.
+    const tmp = mkdtempSync(join(tmpdir(), "kagero-sim-test-"));
+    vi.stubEnv("TMPDIR", tmp);
+    try {
+      const leftovers = () => readdirSync(tmp).filter((n) => n.startsWith("kagero-sim-"));
+      const sim = await startSim({ agentBin, testAppPath, suspendCycles: 1 });
+      try {
+        expect(leftovers()).toHaveLength(sim.realCollector ? 2 : 1);
+        expect(firstBadResult((await sim.run()).lifecycle.results)).toBeNull();
+      } finally {
+        await sim.teardown();
+      }
+      expect(leftovers()).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
 

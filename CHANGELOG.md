@@ -103,6 +103,10 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   into its work directory, which anyone can write to so that the test app
   can keep its state there. The agent refuses to render into such a
   directory, so the collector never started and the E2E failed.
+- **Simulator**: `startSim` now removes the temp dirs it creates (the
+  app's state dir and, in real-collector mode, the collector config dir)
+  on teardown and when startup fails. Before, every run left them under
+  `/tmp`.
 - **Durable stitcher**: fetching the execution history no longer throws a
   `TypeError` on every notification. The SDK client's `send` was called
   without its client, so the stitcher never exported a trace or a metric.

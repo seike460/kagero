@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testAppPath } from "./e2e.js";
 import { callHook, HOOK_PATH, runBody } from "./hooks.js";
 import { startMockOtlp } from "./mock-otlp.js";
+import { startSim } from "./scenario.js";
 import {
   forbiddenMetricKeys,
   isAppHookLog,
@@ -143,5 +148,39 @@ describe("runBody", () => {
     const b = runBody({ microvmId: "m1", tenantId: "t", sessionId: "s" });
     expect(b.microvmId).toBe("m1");
     expect((b.runHookPayload as { tenant: { id: string } }).tenant.id).toBe("t");
+  });
+});
+
+describe("startSim temp dirs", () => {
+  // TMPDIR points at a fresh dir, so every temp dir startSim creates
+  // lands here and a leftover is easy to see.
+  let tmp: string;
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "kagero-sim-test-"));
+    vi.stubEnv("TMPDIR", tmp);
+    // Collector mode also creates the collector config dir. The agent
+    // never gets as far as starting a collector here.
+    vi.stubEnv("KAGERO_SIM_COLLECTOR_BIN", "/nonexistent/otelcol-contrib");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+  const leftovers = () => readdirSync(tmp).filter((n) => n.startsWith("kagero-sim-"));
+
+  it("removes them when the agent never comes up", { timeout: 30_000 }, async () => {
+    const agentBin = join(tmp, "fake-agent");
+    writeFileSync(agentBin, "#!/bin/sh\nexit 1\n");
+    chmodSync(agentBin, 0o755);
+    await expect(startSim({ agentBin, testAppPath })).rejects.toThrow(/agent failed to start/);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it("removes them when the agent cannot be spawned", async () => {
+    // A NUL byte in the env makes spawn throw at once.
+    await expect(
+      startSim({ agentBin: process.execPath, testAppPath, agentEnv: { BAD: "a\0b" } }),
+    ).rejects.toThrow(/null bytes/);
+    expect(leftovers()).toEqual([]);
   });
 });

@@ -4,7 +4,7 @@
  * evidence needed to verify the hook contract. Used by both the CLI
  * (`kagero-sim run`) and the vitest E2E.
  */
-import { chmodSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -60,7 +60,58 @@ export async function startSim(opts: SimOptions): Promise<SimHandle> {
     );
   }
   const otlp = await startMockOtlp(0);
-  const dir = mkdtempSync(join(tmpdir(), "kagero-sim-"));
+  const started: Started = { tempDirs: [] };
+  try {
+    return await launch(opts, otlp, started);
+  } catch (e) {
+    // Stop the agent before removing the dirs it may still write to.
+    if (started.agent) {
+      started.agent.stop("SIGKILL");
+      await exitedWithin(started.agent, 5_000);
+    }
+    await otlp.close();
+    removeTempDirs(started);
+    throw e;
+  }
+}
+
+/** What a sim run has created so far: every temp dir, and the agent
+ * once spawned. Teardown and every startup failure remove the dirs —
+ * repeated runs must not pile them up under /tmp. */
+interface Started {
+  tempDirs: string[];
+  agent?: AgentHandle;
+}
+
+function tempDir(started: Started, prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  started.tempDirs.push(dir);
+  return dir;
+}
+
+function removeTempDirs(started: Started): void {
+  for (const dir of started.tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+}
+
+/** True once the agent exits, false after `ms` — a failed spawn may never
+ * emit 'exit'. */
+async function exitedWithin(agent: AgentHandle, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      agent.exited.then(() => true),
+      new Promise<boolean>((r) => {
+        timer = setTimeout(() => r(false), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** startSim's body — records in `started` what a failure must undo. */
+async function launch(opts: SimOptions, otlp: MockOtlp, started: Started): Promise<SimHandle> {
+  const dir = tempDir(started, "kagero-sim-");
   // The app may be dropped to uid 65534 (root-mode agent) — it still has
   // to write its state file here.
   chmodSync(dir, 0o777);
@@ -96,7 +147,7 @@ export async function startSim(opts: SimOptions): Promise<SimHandle> {
     // Not in `dir`: the agent refuses to render into a directory the app
     // can write (0777 without the sticky bit).
     collectorEnv.KAGERO_COLLECTOR_CONFIG_OUT = join(
-      mkdtempSync(join(tmpdir(), "kagero-sim-collector-")),
+      tempDir(started, "kagero-sim-collector-"),
       "collector.yaml",
     );
     collectorEnv.KAGERO_OTLP_ENDPOINT_LGTM = `http://127.0.0.1:${otlp.port}`;
@@ -128,6 +179,7 @@ export async function startSim(opts: SimOptions): Promise<SimHandle> {
       ...opts.appEnv,
     },
   });
+  started.agent = agent;
   try {
     await waitForAdmin(ports.admin);
     // And the app's hook port — the runtime only calls /ready once the
@@ -135,8 +187,6 @@ export async function startSim(opts: SimOptions): Promise<SimHandle> {
     // NoListener (a real scenario covered separately, not the happy path).
     await waitForApp(ports.appHook);
   } catch (e) {
-    agent.stop("SIGKILL");
-    await otlp.close();
     throw new Error(`agent failed to start: ${(e as Error).message}\nstderr: ${agent.stderr()}`);
   }
 
@@ -180,12 +230,12 @@ export async function startSim(opts: SimOptions): Promise<SimHandle> {
     // exits within ~5s. SIGKILL only as the escape hatch, and SIGKILL on
     // the agent alone can NOT reach the app's own process group.
     agent.stop("SIGTERM");
-    const exited = await Promise.race([
-      agent.exited.then(() => true),
-      new Promise<boolean>((r) => setTimeout(() => r(false), 8_000)),
-    ]);
-    if (!exited) agent.stop("SIGKILL");
+    if (!(await exitedWithin(agent, 8_000))) {
+      agent.stop("SIGKILL");
+      await exitedWithin(agent, 5_000);
+    }
     await otlp.close();
+    removeTempDirs(started);
   };
 
   return { agent, otlp, ports, realCollector: !!collectorBin, run, teardown };
