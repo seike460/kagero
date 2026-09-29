@@ -108,14 +108,17 @@ AWS は送信を拒みます。
 
 ## 識別属性のフィルタ（ADR-008）
 
-ID はレコード単位ではなく **resource** 単位で刻印します（`resource`
-プロセッサ / `otelcol.processor.transform` の `context = "resource"`）。
-Prometheus 系の取り込みでラベルになるのは resource 属性だからです。メトリクスの pipeline はさらに、
-アプリが自分の resource に主張した ID 形のキー（`service.instance.id`・
-`faas.instance`・`kagero.tenant.id`・`kagero.session.id` など）を resource・
-データポイント・scope の 3 つの段階で削除します（scope 属性は Prometheus
-互換の取り込みで `otel_scope_*` ラベルになります）。ログと trace には
-`upsert` で全識別属性を付け、アプリの自己申告を上書きします。
+OTel Collector と Alloy のテンプレートは、ID をレコード単位ではなく
+**resource** 単位で刻印します（`resource` プロセッサ /
+`otelcol.processor.transform` の `context = "resource"`）。
+Prometheus 系の取り込みでラベルになるのは resource 属性だからです。その
+メトリクスの pipeline はさらに、アプリが自分の resource に主張した ID 形の
+キー（`service.instance.id`・`faas.instance`・`kagero.tenant.id`・
+`kagero.session.id` など）を resource・データポイント・scope の 3 つの段階で
+削除します（scope 属性は Prometheus 互換の取り込みで `otel_scope_*` ラベルに
+なります）。ログと trace には `upsert` で全識別属性を付け、アプリの自己申告を
+上書きします。Rotel のテンプレートは、このどれも行いません（「未確認」の
+Rotel の注意点を参照）。
 
 ## 起動契約
 
@@ -148,9 +151,12 @@ Prometheus 系の取り込みでラベルになるのは resource 属性だか�
   実行ロールの最小の権限: PoC-01、PoC-05。
 - Rotel の注意点: 内部バッチのため ADR-006 の同期性を完全には満たせません。
   `ROTEL_OTEL_RESOURCE_ATTRIBUTES` は全シグナルに付き、信号ごとの
-  絞り込みはありません。ADR-008 を守るため、同梱の Rotel テンプレートは
+  絞り込みはありません。このため同梱の Rotel テンプレートは、
   メトリクス安全な属性だけを付けます — **Rotel 経路では
   インスタンス・テナント・セッション ID を一切付けません**。そのため
   Rotel では MicroVM ごとのログ・トレース掘り下げができません。
-  完全な識別には OTel Collector か Alloy のテンプレートを使います。
+  また、Rotel のテンプレートは**属性を何も削除しません**。アプリが自分の
+  テレメトリに付けた ID（`service.instance.id` など）は、メトリクスの
+  ラベルに残り、ADR-008 に反します。完全な識別と削除には、
+  OTel Collector か Alloy のテンプレートを使います。
   Rotel の信号別サポートを広げる前に PoC-04 で再確認します。

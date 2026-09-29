@@ -110,16 +110,17 @@ AWS rejects the exports.
 
 ## Identity filtering (ADR-008)
 
-Ids are stamped at **resource** level (`resource` processor /
-`otelcol.processor.transform` with `context = "resource"`), not record
-level — resource attributes are what Prometheus-style ingestion turns
-into labels. The metrics pipeline
-additionally deletes every id-shaped key the app may have claimed on its
-own resource (`service.instance.id`, `faas.instance`, `kagero.tenant.id`,
-`kagero.session.id`, …) at resource, datapoint AND scope level — scope
-attributes surface as `otel_scope_*` labels on Prometheus-compatible
-ingestion. Logs and traces get the full identity via `upsert`,
-overwriting app self-claims.
+The OTel Collector and Alloy templates stamp ids at **resource** level
+(`resource` processor / `otelcol.processor.transform` with
+`context = "resource"`), not record level — resource attributes are
+what Prometheus-style ingestion turns into labels. Their metrics
+pipeline additionally deletes every id-shaped key the app may have
+claimed on its own resource (`service.instance.id`, `faas.instance`,
+`kagero.tenant.id`, `kagero.session.id`, …) at resource, datapoint AND
+scope level — scope attributes surface as `otel_scope_*` labels on
+Prometheus-compatible ingestion. Logs and traces get the full identity
+via `upsert`, overwriting app self-claims. The Rotel templates do none
+of this (see the Rotel caveats under Unverified).
 
 ## Spawn contract
 
@@ -153,9 +154,11 @@ because the rendered config needs the secret that `/run` fetches.
   The minimal execution-role permissions — PoC-01 / PoC-05.
 - Rotel caveats: batch internals prevent full ADR-006 synchronicity, and
   `ROTEL_OTEL_RESOURCE_ATTRIBUTES` applies to ALL signals with no
-  per-signal scoping. To stay ADR-008-safe the shipped Rotel templates
-  stamp only metric-safe attributes — **instance/tenant/session ids are
-  not attached at all on the Rotel path**, so per-VM drilldown of
-  logs/traces is unavailable there. Full identity requires the OTel Collector
-  or Alloy templates. Re-verify Rotel's per-signal support in PoC-04
-  before extending this.
+  per-signal scoping. The shipped Rotel templates therefore stamp only
+  metric-safe attributes — **instance/tenant/session ids are not
+  attached at all on the Rotel path**, so per-VM drilldown of
+  logs/traces is unavailable there. They also **strip nothing**: ids
+  that the app sets on its own telemetry (`service.instance.id`, for
+  example) reach the metric labels, against ADR-008. Full identity and
+  the strip require the OTel Collector or Alloy templates. Re-verify
+  Rotel's per-signal support in PoC-04 before extending this.
