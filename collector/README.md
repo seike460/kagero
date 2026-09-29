@@ -78,7 +78,8 @@ by a shell. A secret *value* containing the literal `{{KAGERO_` mark
 trips the leftover-placeholder check and fails the render — pick
 secrets without that substring. CloudWatch needs no secret — the
 collector's `sigv4auth` extension signs with the execution role
-(ADR-011).
+(ADR-011). The permissions that role needs are listed under CloudWatch
+prerequisites.
 
 ## CloudWatch prerequisites
 
@@ -93,6 +94,19 @@ AWS rejects the exports.
   stream `otlp` in it. Every MicroVM of the image writes to that one
   stream. The OTel Collector template tells them apart by resource
   attributes; the Rotel template does not (see Unverified below).
+- **Execution role.** The collector signs with the MicroVM's execution
+  role (`--execution-role-arn` of `run-microvm`). With the OTel Collector
+  template, the role needs:
+  - `logs:PutLogEvents` on
+    `arn:aws:logs:<region>:<account>:log-group:/kagero/<image-name>:*`
+  - `cloudwatch:PutMetricData` on `*`
+  - `xray:PutTraceSegments` and `xray:PutSpans` on `*`. The X-Ray OTLP
+    endpoint also needs Transaction Search enabled in the account.
+
+  The Rotel template sends metrics and traces with `awsemf` and
+  `awsxray`, whose permissions are not confirmed yet (PoC-04/05). AWS's
+  collector setup guide attaches `CloudWatchAgentServerPolicy`, which
+  covers them. PoC-01 and PoC-05 confirm the minimal set.
 
 ## Identity filtering (ADR-008)
 
@@ -136,6 +150,7 @@ because the rendered config needs the secret that `/run` fetches.
 
 - Alloy vs Rotel memory/startup/reload comparison — PoC-04.
 - CloudWatch OTLP SigV4 service name, log-group headers — PoC-05.
+  The minimal execution-role permissions — PoC-01 / PoC-05.
 - Rotel caveats: batch internals prevent full ADR-006 synchronicity, and
   `ROTEL_OTEL_RESOURCE_ATTRIBUTES` applies to ALL signals with no
   per-signal scoping. To stay ADR-008-safe the shipped Rotel templates

@@ -76,7 +76,8 @@ river・env ファイルへそのまま差し込むため、**表示可能な AS
 source されます。秘密の値に `{{KAGERO_` という文字列が含まれると
 残存チェックが fail-closed で失敗します。その部分列を含まない
 秘密を使ってください。CloudWatch 側は秘密を使いません。収集器の `sigv4auth` が
-実行ロールで署名します（ADR-011）。
+実行ロールで署名します（ADR-011）。そのロールに要る権限は、「CloudWatch の前提」に
+書いています。
 
 ## CloudWatch の前提
 
@@ -91,6 +92,19 @@ AWS は送信を拒みます。
   `otlp` を作ります。同じイメージの MicroVM は、すべてこのストリームに書きます。
   OTel Collector のテンプレートは、resource 属性で MicroVM を見分けます。
   Rotel のテンプレートは見分けません（下の「未確認」を参照）。
+- **実行ロール。** 収集器は、MicroVM の実行ロール（`run-microvm` の
+  `--execution-role-arn`）で署名します。OTel Collector のテンプレートでは、
+  ロールに次の権限が要ります。
+  - `arn:aws:logs:<region>:<account>:log-group:/kagero/<image-name>:*` への
+    `logs:PutLogEvents`
+  - `*` への `cloudwatch:PutMetricData`
+  - `*` への `xray:PutTraceSegments` と `xray:PutSpans`。X-Ray の OTLP
+    エンドポイントには、アカウントで Transaction Search を有効にしておくことも要ります。
+
+  Rotel のテンプレートは、メトリクスとトレースを `awsemf` と `awsxray` で送ります。
+  その権限は、まだ確かめていません（PoC-04/05）。AWS の収集器の設定手順は
+  `CloudWatchAgentServerPolicy` を付けており、この権限も含みます。最小の権限は
+  PoC-01 と PoC-05 で確かめます。
 
 ## 識別属性のフィルタ（ADR-008）
 
@@ -131,6 +145,7 @@ Prometheus 系の取り込みでラベルになるのは resource 属性だか�
 
 - Alloy と Rotel のメモリ・起動時間・再読込の比較: PoC-04。
 - CloudWatch OTLP の SigV4 サービス名とロググループ指定: PoC-05。
+  実行ロールの最小の権限: PoC-01、PoC-05。
 - Rotel の注意点: 内部バッチのため ADR-006 の同期性を完全には満たせません。
   `ROTEL_OTEL_RESOURCE_ATTRIBUTES` は全シグナルに付き、信号ごとの
   絞り込みはありません。ADR-008 を守るため、同梱の Rotel テンプレートは

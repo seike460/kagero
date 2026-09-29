@@ -166,6 +166,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   `/terminate` by connecting to the MicroVM's own IP. The agent's startup
   warning says so too. The risk stays open until PoC-02 confirms the
   addresses Lambda sends hooks from.
+- **Docs**: `collector/README.md` now lists the execution-role
+  permissions that the CloudWatch backend needs: `logs:PutLogEvents`,
+  `cloudwatch:PutMetricData`, `xray:PutTraceSegments` and
+  `xray:PutSpans`, plus Transaction Search for traces. No document named
+  them before.
 
 ## [0.1.0] — 2026-09-28
 

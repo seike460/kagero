@@ -82,7 +82,9 @@ the collector's own receiver. For CloudWatch, replace the collector:
 copy in `otelcol-contrib` and `collector/cloudwatch/collector.yaml.tmpl`,
 and set `KAGERO_BACKEND=cloudwatch`, `KAGERO_COLLECTOR_BIN` and
 `KAGERO_COLLECTOR_ARGS` to match (see the spawn contract in
-`collector/README.md`).
+`collector/README.md`). CloudWatch also needs a log group, a log stream
+and execution-role permissions set up in advance (see "CloudWatch
+prerequisites" in the same file).
 
 ## Deploy
 

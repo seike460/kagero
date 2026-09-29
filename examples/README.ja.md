@@ -93,7 +93,9 @@ CloudWatch に送るときは、収集器を入れ替えます。`otelcol-contri
 `collector/cloudwatch/collector.yaml.tmpl` をコピーし、
 `KAGERO_BACKEND=cloudwatch` を設定します。`KAGERO_COLLECTOR_BIN` と
 `KAGERO_COLLECTOR_ARGS` も合わせて変えます（`collector/README.md` の
-起動契約を参照）。
+起動契約を参照）。CloudWatch では、ロググループ・ログストリーム・
+実行ロールの権限も前もって用意します（`collector/README.ja.md` の
+「CloudWatch の前提」を参照）。
 
 ## デプロイ
 
