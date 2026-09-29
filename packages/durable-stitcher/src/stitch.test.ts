@@ -433,6 +433,25 @@ describe("stitchNotification", () => {
     ]);
   });
 
+  it("appends the signal path to the endpoint's prefix path", async () => {
+    // The OtlpTarget.endpoint shape: trailing slashes are dropped and
+    // /v1/<signal> is appended to the prefix path.
+    const urls: string[] = [];
+    await stitchNotification(terminalEvent, {
+      fetcher: fixtureFetcher(rec),
+      targets: [{ endpoint: "https://gw.example.com/otlp//", backend: "lgtm" as const }],
+      send: {
+        async post(url) {
+          urls.push(url);
+        },
+      },
+    });
+    expect(urls).toEqual([
+      "https://gw.example.com/otlp/v1/traces",
+      "https://gw.example.com/otlp/v1/metrics",
+    ]);
+  });
+
   it("routes cloudwatch signals to per-signal endpoints", async () => {
     const urls: string[] = [];
     const cwTarget = {

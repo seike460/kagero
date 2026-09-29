@@ -17,13 +17,20 @@ import { canonicalQuery, credsFromEnv, signRequest } from "./sigv4.js";
 import { type AssembledTrace, durationSeconds, replayCount } from "./stitch.js";
 
 export interface OtlpTarget {
-  /** Base endpoint, e.g. "https://otlp.example.com" (no path). */
+  /**
+   * Base URL: an http(s) scheme, a host, an optional port and an
+   * optional prefix path, e.g. "https://otlp.example.com" or
+   * "https://gw.example.com/otlp". Trailing slashes are dropped and
+   * "/v1/traces" or "/v1/metrics" is appended as text, so the URL takes
+   * no query or fragment (it would precede the signal path) and no
+   * userinfo (fetch refuses it; credentials go in `headers`).
+   */
   endpoint: string;
   /**
-   * Per-signal endpoint overrides. CloudWatch OTLP endpoints differ per
-   * signal (xray.<region> for traces, monitoring.<region> for metrics,
-   * logs.<region> for logs — AWS OTLP endpoints doc); a single base
-   * cannot reach all three.
+   * Per-signal endpoint overrides, in the same shape. CloudWatch OTLP
+   * endpoints differ per signal (xray.<region> for traces,
+   * monitoring.<region> for metrics, logs.<region> for logs — AWS OTLP
+   * endpoints doc); a single base cannot reach all three.
    */
   endpointTraces?: string;
   endpointMetrics?: string;
@@ -126,9 +133,10 @@ function headersFor(
   const creds = credsFromEnv();
   if (!creds) throw new Error("cloudwatch backend needs AWS credentials in the environment");
   if (!target.region) throw new Error("cloudwatch backend needs a region for SigV4");
-  // Sign the path the request actually takes — an endpoint may carry a
-  // prefix path (e.g. behind a proxy) and/or query. The query must be
-  // canonicalized (RFC3986-encoded, sorted) or the signature mismatches.
+  // Sign the URL the request goes to. Its path includes the endpoint's
+  // prefix path (e.g. behind a proxy). An endpoint takes no query, but a
+  // query in the URL is still signed in canonical form (RFC3986-encoded,
+  // sorted), so the signature always matches what is sent.
   const u = new URL(url);
   return signRequest(
     {

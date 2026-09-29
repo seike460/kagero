@@ -37,6 +37,10 @@ export interface KageroDurableStitcherProps {
    * deployments). Required for `lgtm`; for `cloudwatch` it is the shared
    * endpoint override — unset means region-derived AWS defaults.
    * Ignored when `backend` is "both" (use the per-backend props).
+   * Every endpoint prop is a base URL: the stitcher appends /v1/traces
+   * and /v1/metrics, so it may carry a prefix path but no query,
+   * fragment or userinfo (`OtlpTarget.endpoint` in
+   * packages/durable-stitcher).
    */
   otlpEndpoint?: string;
   /**
