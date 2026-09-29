@@ -1,11 +1,12 @@
 # kagero MicroVM image — Node.js example (microvms.md §10).
-# Build from the REPO ROOT so the collector template is in context:
-#   docker build -f examples/node/Dockerfile -t kagero-example-node .
+# Build from the REPO ROOT so the collector template is in context
+# (arm64 only — the base and agent images are linux/arm64):
+#   docker build --platform linux/arm64 -f examples/node/Dockerfile -t kagero-example-node .
 FROM public.ecr.aws/lambda/microvms:al2023-minimal
 
-# The agent binary — from the released OCI image. Until v0.1 is
-# published, build it locally and copy it into context:
-#   cargo build --release && cp target/release/kagero kagero
+# The agent binary — from the released OCI image. To try unreleased
+# agent changes, build it into the context root:
+#   docker build --platform linux/arm64 -f docker/agent.Dockerfile -o . .
 # then replace the line below with:
 #   COPY kagero /usr/local/bin/kagero
 COPY --from=ghcr.io/seike460/kagero:0.1 /kagero /usr/local/bin/kagero

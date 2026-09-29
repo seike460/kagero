@@ -47,27 +47,43 @@ MicroVM イメージです。本番の負荷には使いません。アプリが
 
 ## ビルド
 
-`COPY --from=ghcr.io/seike460/kagero:0.1` は公開済みイメージを
-前提にします。v0.1 が出るまでは、エージェントをローカルで
-ビルドして context にコピーしてください
-（`cargo build --release && cp target/release/kagero kagero`）。
-その行を `COPY kagero /usr/local/bin/kagero` に置き換えます
-（`target/` は dockerignore されているため、バイナリは
-context のルートに置きます）。
-
 リポジトリのルートで実行します（収集器のテンプレートを context
 に含めるため）。
 
 ```sh
-docker build -f examples/node/Dockerfile -t kagero-example-node .
-docker build -f examples/python/Dockerfile -t kagero-example-python .
+docker build --platform linux/arm64 -f examples/node/Dockerfile -t kagero-example-node .
+docker build --platform linux/arm64 -f examples/python/Dockerfile -t kagero-example-python .
 ```
 
-収集器の Alloy は `grafana/alloy:v1.20.0` にピンしています。
-`KAGERO_OTLP_ENDPOINT_LGTM`（または `_CLOUDWATCH`）は実際の
+イメージは arm64 専用です。ベースの `al2023-minimal` も、
+エージェントのイメージ `ghcr.io/seike460/kagero:0.1` も、
+`linux/arm64` しか公開されていません。x86_64 のホストでは、
+QEMU によるエミュレーション（binfmt）が必要です。
+
+まだリリースしていないエージェントの変更を試すときは、
+リリース用の Dockerfile で arm64 の静的バイナリを作ります。
+バイナリは context のルートに `kagero` として出ます。そのうえで
+`COPY --from=ghcr.io/seike460/kagero:0.1` の行を
+`COPY kagero /usr/local/bin/kagero` に置き換えます。
+
+```sh
+docker build --platform linux/arm64 -f docker/agent.Dockerfile -o . .
+```
+
+（ホストで `cargo build` すると、ホスト向けのバイナリができます。
+macOS や x86_64 のホストで作ったものは、arm64 のイメージの中では
+動きません。）
+
+どちらのイメージも、収集器に `grafana/alloy:v1.20.0` と、LGTM 専用の
+Alloy テンプレートを使います。`KAGERO_OTLP_ENDPOINT_LGTM` は実際の
 エンドポイントに変えてください。`https://otlp.invalid` は
 分かりやすく失敗するプレースホルダーです。`localhost:4318` に
 すると、テレメトリが収集器自身の受信口にループします。
+CloudWatch に送るときは、収集器を入れ替えます。`otelcol-contrib` と
+`collector/cloudwatch/collector.yaml.tmpl` をコピーし、
+`KAGERO_BACKEND=cloudwatch` を設定します。`KAGERO_COLLECTOR_BIN` と
+`KAGERO_COLLECTOR_ARGS` も合わせて変えます（`collector/README.md` の
+起動契約を参照）。
 
 ## デプロイ
 

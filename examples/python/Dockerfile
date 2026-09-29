@@ -1,10 +1,12 @@
 # kagero MicroVM image — Python example (microvms.md §10).
-# Build from the REPO ROOT so the collector template is in context:
-#   docker build -f examples/python/Dockerfile -t kagero-example-python .
+# Build from the REPO ROOT so the collector template is in context
+# (arm64 only — the base and agent images are linux/arm64):
+#   docker build --platform linux/arm64 -f examples/python/Dockerfile -t kagero-example-python .
 FROM public.ecr.aws/lambda/microvms:al2023-minimal
 
-# Until v0.1 is published, build the agent locally and copy it into
-# context (cargo build --release && cp target/release/kagero kagero):
+# Unreleased agent changes: build the agent into the context root
+# (docker build --platform linux/arm64 -f docker/agent.Dockerfile -o . .)
+# and swap the next line for:
 #   COPY kagero /usr/local/bin/kagero
 COPY --from=ghcr.io/seike460/kagero:0.1 /kagero /usr/local/bin/kagero
 COPY --from=grafana/alloy:v1.20.0 /bin/alloy /usr/local/bin/alloy

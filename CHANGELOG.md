@@ -113,6 +113,16 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Examples**: the Python example app no longer sends an OTLP log when
   it starts. The app starts during the image build, before the
   collector runs, and nothing may be sent at build time.
+- **Docs**: the examples README and Dockerfiles build with
+  `--platform linux/arm64` and say that the images are arm64 only. The
+  stale "until v0.1 is published" notes are gone. To try unreleased
+  agent changes, they now build the binary with `docker/agent.Dockerfile`,
+  because `cargo build` on macOS or x86_64 makes a binary that the arm64
+  image cannot run.
+- **Docs**: the examples README no longer suggests
+  `KAGERO_OTLP_ENDPOINT_CLOUDWATCH` for the example images, which ship
+  the LGTM-only Alloy template. It now says what switching to CloudWatch
+  takes.
 
 ## [0.1.0] — 2026-09-28
 
