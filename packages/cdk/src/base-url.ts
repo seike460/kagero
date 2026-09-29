@@ -1,10 +1,10 @@
 /**
- * Synth-time mirror of the base-URL check that the durable stitcher
- * applies at init: an absolute http(s) URL with a host, an optional port
- * and an optional prefix path. It appends /v1/<signal> to the value as
- * text, so a query or fragment would come before it, fetch refuses
- * userinfo, and whitespace that the URL parser trims from the value
- * alone breaks the joined URL.
+ * Synth-time mirror of the base-URL check that the durable stitcher and
+ * the k6 runner apply at init: an absolute http(s) URL with a host, an
+ * optional port and an optional prefix path. Both append a path to the
+ * value as text (/v1/<signal>, /api/annotations), so a query or fragment
+ * would come before it, fetch refuses userinfo, and whitespace that the
+ * URL parser trims from the value alone breaks the joined URL.
  */
 
 import { Token } from "aws-cdk-lib";

@@ -48,9 +48,16 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   to the wrong path, and fetch refused userinfo. Each notification then
   failed its retries and ended in the dead-letter queue. The error names
   the setting but not its value.
+- **k6 runner**: the worker checks `KAGERO_GRAFANA_URL` the same way at
+  init, before k6 starts, and drops a trailing slash from it. The
+  annotation POST appends `/api/annotations` to the value, so a query,
+  fragment or userinfo made every annotation fail, and a trailing slash
+  made the path start with `//`. The error names the variable but not
+  its value. A failed annotation POST still only warns.
 - **CDK**: `KageroDurableStitcher` applies the same check to its
-  endpoint props at synth time. The error names the prop but not its
-  value. An unresolved token is checked by the handler at init instead.
+  endpoint props at synth time, and `KageroK6Run` to `grafanaUrl` (or
+  `KAGERO_GRAFANA_URL` in `environment`). The error names the prop but
+  not its value. An unresolved token is checked at init instead.
 - **Agent**: the hook port and the admin port are bound before the app
   starts, so the app can no longer take either one first. A failed admin
   bind or accept is now logged instead of dropped silently.

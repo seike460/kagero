@@ -10,7 +10,10 @@
  */
 
 export interface GrafanaAnnotations {
-  /** Base URL, e.g. "https://grafana.example.com" (no trailing slash). */
+  /** Base URL, e.g. "https://grafana.example.com", with an optional
+   *  prefix path. Trailing slashes are dropped and "/api/annotations" is
+   *  appended as text, so it takes no query, fragment or userinfo;
+   *  handlerFromEnv refuses such a KAGERO_GRAFANA_URL at init. */
   endpoint: string;
   /** Grafana service-account token with annotations:create. */
   token: string;
@@ -46,7 +49,7 @@ export async function postRunAnnotation(
   fetchImpl: FetchLike = fetch as unknown as FetchLike,
 ): Promise<void> {
   try {
-    const res = await fetchImpl(`${g.endpoint}/api/annotations`, {
+    const res = await fetchImpl(`${g.endpoint.replace(/\/+$/, "")}/api/annotations`, {
       method: "POST",
       headers: {
         "content-type": "application/json",

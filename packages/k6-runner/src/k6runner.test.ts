@@ -641,6 +641,19 @@ describe("postRunAnnotation", () => {
     ]);
   });
 
+  it("drops trailing slashes before /api/annotations, keeping a prefix path", async () => {
+    const urls: string[] = [];
+    await postRunAnnotation(
+      { endpoint: "https://g.example.com/grafana//", token: "t" },
+      RUN,
+      async (u) => {
+        urls.push(u);
+        return { ok: true, status: 200 };
+      },
+    );
+    expect(urls).toEqual(["https://g.example.com/grafana/api/annotations"]);
+  });
+
   it("bounds the POST with a timeout signal by default", async () => {
     let signal: AbortSignal | undefined;
     await postRunAnnotation(
@@ -693,6 +706,57 @@ describe("handlerFromEnv", () => {
       );
       expect(results.map((r) => r.exitCode)).toEqual([0, 0]);
       expect(posts).toEqual([{ auth: "Bearer t", tags: ["kagero", "k6", "run:run-9"] }]);
+    } finally {
+      await grafana.close();
+    }
+  });
+
+  it("refuses a KAGERO_GRAFANA_URL of the wrong shape at init, without its value", () => {
+    // Tokens sit in the userinfo, the path, the query and the fragment.
+    for (const url of [
+      "https://g.example.com/path-tok?q=query-tok",
+      "https://g.example.com/path-tok?",
+      "https://g.example.com/path-tok#frag-tok",
+      "https://admin:pw-tok@g.example.com/path-tok",
+      "https://@g.example.com/path-tok",
+      "g.example.com/path-tok",
+      "ftp://g.example.com/path-tok",
+      "https:///path-tok",
+      "https:g.example.com/path-tok",
+      "https://g.example.com/path-tok ",
+      "https://g.example.com/path-tok\n",
+      "https://g.example.com:99999/path-tok",
+    ]) {
+      let msg = "";
+      try {
+        handlerFromEnv({ KAGERO_GRAFANA_URL: url } as NodeJS.ProcessEnv);
+      } catch (e) {
+        msg = String(e);
+      }
+      expect(msg, url).toBe(
+        "Error: KAGERO_GRAFANA_URL must be an absolute http:// or https:// URL with a host, " +
+          "and no query, fragment, userinfo or whitespace",
+      );
+    }
+    // Empty means unset, as for the annotation itself.
+    expect(() => handlerFromEnv({ KAGERO_GRAFANA_URL: "" } as NodeJS.ProcessEnv)).not.toThrow();
+  });
+
+  it("posts under a prefix path given with a trailing slash", async () => {
+    const paths: (string | undefined)[] = [];
+    const grafana = await listen((req, res) => {
+      paths.push(req.url);
+      req.resume();
+      req.on("end", () => res.end("{}"));
+    });
+    try {
+      const handler = handlerFromEnv({
+        KAGERO_GRAFANA_URL: `${grafana.url}/grafana/`,
+        KAGERO_GRAFANA_TOKEN: "t",
+      } as NodeJS.ProcessEnv);
+      const r = await handler({ ...EVENT, startAtMs: Date.now(), annotate: true });
+      expect(r.exitCode).toBe(0);
+      expect(paths).toEqual(["/grafana/api/annotations"]);
     } finally {
       await grafana.close();
     }

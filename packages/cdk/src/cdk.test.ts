@@ -413,7 +413,7 @@ describe("KageroMicrovmImage", () => {
   });
 });
 
-/** Base-URL shapes the stitcher refuses at init.
+/** Base-URL shapes the stitcher and the k6 worker refuse at init.
  *  Tokens sit in the userinfo, the path, the query and the fragment. */
 const REJECTED_BASE_URLS = [
   "https://h.example.com/path-tok?q=query-tok",
@@ -748,6 +748,31 @@ describe("KageroK6Run", () => {
     // (no random suffix) still gets the wildcard suffix.
     const secretRead = findStatement(t, "secretsmanager:GetSecretValue");
     expect(JSON.stringify(secretRead?.Resource)).toContain("secret:g-AbC-??????");
+  });
+
+  it("checks the Grafana URL at synth, as the worker does at init", () => {
+    for (const value of REJECTED_BASE_URLS) {
+      for (const [label, props] of [
+        ["grafanaUrl", { grafanaUrl: value }],
+        ["environment KAGERO_GRAFANA_URL", { environment: { KAGERO_GRAFANA_URL: value } }],
+      ] as const) {
+        const { stack } = makeStack();
+        const msg = synthError(
+          () => new KageroK6Run(stack, "Run", { entry: FIXTURE_ENTRY, ...props }),
+        );
+        expect(msg, `${label}=${JSON.stringify(value)}`).toBe(`Error: ${label} ${BASE_URL_RULE}`);
+      }
+    }
+    const { stack } = makeStack();
+    const token = new CfnParameter(stack, "GrafanaUrl").valueAsString;
+    let n = 0;
+    for (const value of [...ACCEPTED_BASE_URLS, token]) {
+      new KageroK6Run(stack, `Run${n++}`, { entry: FIXTURE_ENTRY, grafanaUrl: value });
+      new KageroK6Run(stack, `Run${n++}`, {
+        entry: FIXTURE_ENTRY,
+        environment: { KAGERO_GRAFANA_URL: value },
+      });
+    }
   });
 
   it("rejects plaintext secret env and bad tolerance", () => {

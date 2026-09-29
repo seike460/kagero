@@ -53,6 +53,7 @@ import {
   aws_stepfunctions_tasks as tasks,
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
+import { checkBaseUrl } from "./base-url.js";
 import { grantSecretRead } from "./secrets.js";
 
 const require_ = createRequire(import.meta.url);
@@ -81,7 +82,12 @@ export interface KageroK6RunProps {
   /** Exporter headers as "k1=v1,k2=v2" (K6_OTEL_HEADERS) — not the
    *  "Name: value" of KageroDurableStitcher's otlpHeaderSecretArn. */
   otlpHeadersSecretArn?: string;
-  /** Grafana base URL for region annotations (not secret). */
+  /** Grafana base URL for region annotations (not secret), e.g.
+   *  "https://grafana.example.com", with an optional prefix path. The
+   *  worker appends /api/annotations, so a query, fragment or userinfo
+   *  fails synth (the Grafana token goes in grafanaTokenSecretArn); an
+   *  unresolved CDK token is checked by the worker at init instead. The
+   *  same check applies to KAGERO_GRAFANA_URL in `environment`. */
   grafanaUrl?: string;
   memorySize?: number;
   timeout?: Duration;
@@ -153,6 +159,13 @@ export class KageroK6Run extends Construct {
         );
       }
       environment.KAGERO_GRAFANA_URL = props.grafanaUrl;
+    }
+    // The worker refuses a bad value at init; fail synth instead.
+    if (environment.KAGERO_GRAFANA_URL) {
+      checkBaseUrl(
+        props.grafanaUrl ? "grafanaUrl" : "environment KAGERO_GRAFANA_URL",
+        environment.KAGERO_GRAFANA_URL,
+      );
     }
     const secretGrants: [string | undefined, string][] = [
       [props.grafanaTokenSecretArn, "KAGERO_GRAFANA_TOKEN_SECRET_ARN"],
