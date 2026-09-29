@@ -242,6 +242,7 @@ CMD ["/app/start"]
 - 秘密でない設定（バックエンドの種類、エンドポイント、baseline、フックの時間上限）は、イメージの環境変数で渡します。
 - 秘密情報は、`/run` の時点で Secrets Manager から取ります（[ADR-011](../decisions.md#adr-011-秘密情報の渡し方)）。
 - MicrovmImage の Hooks には、kagero のフックのポートを設定します。v0.5 で CDK construct にまとめます。
+- イメージには、kagero の `/LICENSE` と、バイナリに入る crate と Rust の標準ライブラリのライセンス文（`/licenses`）も入っています。自分のイメージを配るときは、これらも `COPY --from` で取り込みます。
 
 ## 11. 未解決の問い
 

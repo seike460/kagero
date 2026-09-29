@@ -244,6 +244,7 @@ CMD ["/app/start"]
 - Non-secret settings (backend type, endpoint, baseline, hook time limit) are passed via image environment variables.
 - Secrets are fetched from Secrets Manager at `/run` ([ADR-011](../decisions.en.md#adr-011-secret-delivery)).
 - The MicrovmImage Hooks are set to kagero's hook port. This will be packaged into a CDK construct in v0.5.
+- The image also carries kagero's `/LICENSE` and the license texts of the crates and the Rust standard library built into the binary (`/licenses`). When you distribute your own image, copy them in with `COPY --from` as well.
 
 ## 11. Open questions
 

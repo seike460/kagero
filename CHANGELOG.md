@@ -119,6 +119,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Pricing**: the MicroVM prices now apply from 2026-06-22, the day
   MicroVMs launched. They applied from 2026-06-09, so an `asOf` before
   the launch still got a MicroVM price.
+- **Image**: `ghcr.io/seike460/kagero` now carries kagero's `/LICENSE`
+  and, under `/licenses`, the license texts of the crates and the Rust
+  standard library built into the binary. It held only the binary,
+  without the notices that the MIT, ISC and BSD licenses of those
+  crates require.
 - **Docs**: the k6 runner (`outputFromEnv`) and `KageroK6Run` now list
   the worker env and its values. There, `KAGERO_OTLP_ENDPOINT` is
   `host:port` with no scheme and `KAGERO_OTLP_HEADERS` is
