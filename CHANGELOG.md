@@ -39,6 +39,8 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   run their own script with the worker role's credentials, which k6
   exposes through `__ENV`. The script path now follows `--`, so
   `extraArgs` can no longer replace the script either.
+- **Image**: the build stage pins `rust:1.98.1-alpine3.24` by digest, so
+  rebuilding a tag uses the same Alpine and musl.
 
 ### Fixed
 
