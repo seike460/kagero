@@ -142,6 +142,11 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
   returns its result only after this POST, so a Grafana that stopped
   answering held the shard for up to 300 seconds (the fetch default) and
   could push it past the Lambda timeout.
+- **k6 runner**: a Grafana annotation POST that fails before an answer
+  no longer logs fetch's own message, which can quote the whole
+  `KAGERO_GRAFANA_URL` with its userinfo, path and query. The warning
+  names only the error and the network error code (for example
+  `TypeError (ECONNREFUSED)`).
 - **Dashboards**: the CloudWatch dashboard's `KAGERO_PLATFORM_LOG_GROUP`
   variable now defaults to `/aws/lambda-microvms/<image-name>`, the log
   group where MicroVMs write stdout by default. It showed the Lambda

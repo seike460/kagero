@@ -608,10 +608,37 @@ describe("postRunAnnotation", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await expect(
       postRunAnnotation({ endpoint: "https://g.example.com", token: "t" }, RUN, async () => {
-        throw new Error("connect ECONNREFUSED");
+        // The shape of fetch's own connect failure.
+        const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:3000"), {
+          code: "ECONNREFUSED",
+        });
+        throw new TypeError("fetch failed", { cause });
       }),
     ).resolves.toBeUndefined();
-    expect(warn).toHaveBeenCalledWith("grafana annotation POST failed: connect ECONNREFUSED");
+    expect(warn).toHaveBeenCalledWith("grafana annotation POST failed: TypeError (ECONNREFUSED)");
+  });
+
+  it("keeps the Grafana URL out of the warning when fetch fails", async () => {
+    // fetch quotes the whole URL when it refuses userinfo or cannot
+    // parse it; tokens sit in the userinfo, the path and the query.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const endpoint of [
+      "https://admin:pw-tok@g.example.com/path-tok?q=query-tok",
+      "g.example.com/path-tok?q=query-tok",
+    ]) {
+      await expect(postRunAnnotation({ endpoint, token: "t" }, RUN)).resolves.toBeUndefined();
+    }
+    const lines = warn.mock.calls.map((c) => String(c[0]));
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      for (const t of ["pw-tok", "path-tok", "query-tok"]) {
+        expect(line, `${t} leaked`).not.toContain(t);
+      }
+    }
+    expect(lines).toEqual([
+      "grafana annotation POST failed: TypeError",
+      "grafana annotation POST failed: TypeError (ERR_INVALID_URL)",
+    ]);
   });
 
   it("bounds the POST with a timeout signal by default", async () => {

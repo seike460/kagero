@@ -67,6 +67,16 @@ export async function postRunAnnotation(
   } catch (e) {
     // Transport errors (DNS/connect/timeout) are failures too — warn,
     // never reject.
-    console.warn(`grafana annotation POST failed: ${(e as Error).message}`);
+    console.warn(`grafana annotation POST failed: ${fetchFailure(e)}`);
   }
+}
+
+/** Why fetch failed, without its message: some messages quote the whole
+ *  URL ("Failed to parse URL from …", "…includes credentials: …"), and
+ *  the endpoint's userinfo, path or query may carry a token. The error
+ *  name and the network error code (ECONNREFUSED, ENOTFOUND…) do not. */
+function fetchFailure(e: unknown): string {
+  if (!(e instanceof Error)) return "unknown error";
+  const code = (e.cause as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" ? `${e.name} (${code})` : e.name;
 }
