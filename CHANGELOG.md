@@ -111,6 +111,9 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 - **Dashboards**: the `KageroNoMicrovmTelemetry` alert now says that it
   also fires when no MicroVM is RUNNING, for example when the whole
   fleet is suspended. It fits fleets that should always be active.
+- **Dashboards**: the dashboard description no longer mentions traces
+  or suspend/resume latency. The agent emits no spans, and the suspend
+  panel shows how long MicroVMs stayed suspended.
 - **Docs**: the k6 runner (`outputFromEnv`) and `KageroK6Run` now list
   the worker env and its values. There, `KAGERO_OTLP_ENDPOINT` is
   `host:port` with no scheme and `KAGERO_OTLP_HEADERS` is

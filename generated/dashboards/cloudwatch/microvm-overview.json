@@ -101,7 +101,7 @@
     "from": "now-6h",
     "to": "now"
   },
-  "description": "Lambda MicroVM fleet health: lifecycle, burst usage, suspend/resume latency, cost estimate, logs and traces. All cost figures are ESTIMATES (ADR-009).",
+  "description": "Lambda MicroVM fleet health: lifecycle, burst usage, suspend duration, cost estimate and logs. All cost figures are ESTIMATES (ADR-009).",
   "panels": [
     {
       "type": "row",

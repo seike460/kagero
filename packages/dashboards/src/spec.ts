@@ -68,7 +68,7 @@ export const microvmOverview: DashboardSpec = {
   uid: "kagero-microvm-overview",
   title: "kagero — MicroVM Overview",
   description:
-    "Lambda MicroVM fleet health: lifecycle, burst usage, suspend/resume latency, cost estimate, logs and traces. All cost figures are ESTIMATES (ADR-009).",
+    "Lambda MicroVM fleet health: lifecycle, burst usage, suspend duration, cost estimate and logs. All cost figures are ESTIMATES (ADR-009).",
   tags: ["kagero", "lambda", "microvm"],
   refresh: "1m",
   constants: [
@@ -229,7 +229,6 @@ export const microvmOverview: DashboardSpec = {
         {
           kind: "traces",
           title: "MicroVM lifecycle traces",
-          description: "Tempo traces for kagero spans (hook relay, flush).",
           span: 24,
           height: 9,
           recipes: ["microvm-traces"],
