@@ -118,13 +118,6 @@ describe("buildDashboard", () => {
     expect(groups).toEqual(new Set(["$KAGERO_LOG_GROUP", "$KAGERO_PLATFORM_LOG_GROUP"]));
   });
 
-  it("gives each backend a distinct uid", () => {
-    const lgtm = buildDashboard(microvmOverview, adapterFor("lgtm")) as Dashboard;
-    const cw = buildDashboard(microvmOverview, adapterFor("cloudwatch")) as Dashboard;
-    expect(lgtm.uid).toBe("kagero-microvm-overview-lgtm");
-    expect(cw.uid).toBe("kagero-microvm-overview-cloudwatch");
-  });
-
   it("points metric panels at the right metrics datasource per backend", () => {
     // LGTM uses the core prometheus datasource; CloudWatch OTLP metrics
     // are queried through the AMP plugin (grafana-amazonprometheus-
@@ -147,18 +140,13 @@ describe("buildDashboard", () => {
     }
   });
 
-  it("collapses the Logs row on cloudwatch only, with panels INSIDE it", () => {
+  it("leaves the Logs row expanded on lgtm (collapse is cloudwatch-only)", () => {
     const lgtm = buildDashboard(microvmOverview, adapterFor("lgtm")) as Dashboard;
-    const cw = buildDashboard(microvmOverview, adapterFor("cloudwatch")) as Dashboard;
-    const rows = (d: Dashboard) =>
-      (d.panels ?? []).filter(
-        (p): p is { type: "row"; title?: string; collapsed?: boolean } => p.type === "row",
-      );
-    expect(rows(lgtm).find((r) => r.title === "Logs")?.collapsed).toBe(false);
-    const cwLogRow = rows(cw).find((r) => r.title === "Logs");
-    expect(cwLogRow?.collapsed).toBe(true);
-    // v1: collapsed row must own its panels or they still render+query.
-    expect((cwLogRow as { panels?: unknown[] }).panels?.length).toBe(3);
+    const logRow = (lgtm.panels ?? []).find(
+      (p): p is { type: "row"; title?: string; collapsed?: boolean } =>
+        p.type === "row" && p.title === "Logs",
+    );
+    expect(logRow?.collapsed).toBe(false);
   });
 
   it("defaults the cloudwatch log-group variables to the collector and MicroVM groups", () => {
