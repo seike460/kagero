@@ -7,6 +7,15 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-10-02
+
+### Changed
+
+- **Dependencies**: `Cargo.lock` replaces `yoke-derive` 0.8.3, which
+  crates.io yanked, with 0.8.4. Nothing else in the lockfile moved, and
+  no source code changed. The agent image is rebuilt from the new
+  lockfile.
+
 ## [0.1.1] — 2026-09-29
 
 ### Added
@@ -370,6 +379,7 @@ published artifact.
   MicroVM launcher for long runs, and reconciling the cost estimate
   against the AWS Cost and Usage Report (PoC-09).
 
-[Unreleased]: https://github.com/seike460/kagero/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/seike460/kagero/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/seike460/kagero/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/seike460/kagero/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/seike460/kagero/releases/tag/v0.1.0

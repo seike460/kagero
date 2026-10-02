@@ -2,7 +2,7 @@
 
 A Grafana-first observability kit for the AWS Lambda family — Lambda MicroVMs, Lambda functions, Durable Functions, and k6 load testing — with both LGTM and Amazon CloudWatch as backends.
 
-**Status: preview.** The latest release is v0.1.1 (2026-09-29); v0.1.0, the first MicroVMs preview, was released on 2026-09-28. The agent is published as the container image `ghcr.io/seike460/kagero` (linux/arm64); the TypeScript packages are not on npm, so use them from a checkout of this repository. The modules below are implemented and pass CI (unit tests, simulator E2E against the real agent binary, typecheck, lint, and generated-artifact checks), but **the AWS-backed PoCs have not been run yet** — real-AWS behavior (timeout values, credential reach, actual pricing, snapshot semantics) is unverified. The deviation from the PoC-first rule is recorded in [ADR-012](docs/decisions.md). See the [roadmap](docs/roadmap.md) and the [changelog](CHANGELOG.md).
+**Status: preview.** The latest release is v0.1.2 (2026-10-02); v0.1.0, the first MicroVMs preview, was released on 2026-09-28. The agent is published as the container image `ghcr.io/seike460/kagero` (linux/arm64); the TypeScript packages are not on npm, so use them from a checkout of this repository. The modules below are implemented and pass CI (unit tests, simulator E2E against the real agent binary, typecheck, lint, and generated-artifact checks), but **the AWS-backed PoCs have not been run yet** — real-AWS behavior (timeout values, credential reach, actual pricing, snapshot semantics) is unverified. The deviation from the PoC-first rule is recorded in [ADR-012](docs/decisions.md). See the [roadmap](docs/roadmap.md) and the [changelog](CHANGELOG.md).
 
 [日本語版 README](README.ja.md)
 
