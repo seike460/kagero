@@ -12,8 +12,8 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 ### Changed
 
 - **Dependencies**: `Cargo.lock` replaces `yoke-derive` 0.8.3, which
-  crates.io yanked, with 0.8.4. Nothing else in the lockfile moved, and
-  no source code changed. The agent image is rebuilt from the new
+  crates.io yanked, with 0.8.4. No other dependency changed, and no
+  source code changed. The agent image is rebuilt from the new
   lockfile.
 
 ## [0.1.1] — 2026-09-29
