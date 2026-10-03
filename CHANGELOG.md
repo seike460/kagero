@@ -7,6 +7,12 @@ compatibility guarantees while the version is 0.x (docs/roadmap.md).
 
 ## [Unreleased]
 
+### Changed
+
+- **CI**: `cargo deny check advisories` runs on pushes to `main`, on pull
+  requests, and weekly. A vulnerability, an unmaintained or unsound crate,
+  or a yanked version in `Cargo.lock` fails the job (`deny.toml`).
+
 ## [0.1.2] — 2026-10-02
 
 ### Changed
